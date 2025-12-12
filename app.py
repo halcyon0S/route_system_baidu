@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import os
 import math
+import webbrowser
+import threading
+import time
 from typing import List, Dict, Any, Tuple
 
 import pandas as pd
@@ -266,4 +269,23 @@ def optimize():
 if __name__ == "__main__":
     # 建议：export BAIDU_WEB_AK=xxxxxx
     # 或 Windows：set BAIDU_WEB_AK=xxxxxx
+    
+    # 自动打开浏览器的函数
+    def open_browser():
+        """延迟打开浏览器，确保服务器已启动"""
+        time.sleep(1.5)  # 等待服务器启动
+        url = "http://127.0.0.1:5004"
+        webbrowser.open(url)
+        print(f"✓ 已自动打开浏览器: {url}")
+    
+    # 在后台线程中打开浏览器
+    browser_thread = threading.Thread(target=open_browser)
+    browser_thread.daemon = True
+    browser_thread.start()
+    
+    print("=" * 50)
+    print("🚀 网点路线优化系统正在启动...")
+    print(f"📍 访问地址: http://127.0.0.1:5004")
+    print("=" * 50)
+    
     app.run(host="127.0.0.1", port=5004, debug=True)
