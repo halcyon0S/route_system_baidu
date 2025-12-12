@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>网点路线优化系统（百度地图版）</title>
+
+  <style>
+    /* ====== 这里基本照搬你提供文件的样式 ====== */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
+    #container { width: 100%; height: 100vh; }
+    #control-panel {
+      position: absolute; top: 20px; left: 20px; background: white;
+      padding: 20px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      max-width: 380px; z-index: 1000; max-height: 85vh; overflow-y: auto;
+    }
+    h2 { margin-bottom: 15px; color: #333; font-size: 18px; }
+    .input-group { margin-bottom: 15px; }
+    label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; font-size: 13px; }
+    textarea, input[type="text"], input[type="file"] {
+      width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px;
+      font-size: 12px; font-family: inherit;
+    }
+    textarea { resize: vertical; }
+    input[type="file"] { padding: 8px; }
+    .btn {
+      padding: 10px 20px; margin: 5px 5px 5px 0; border: none; border-radius: 5px;
+      cursor: pointer; font-size: 13px; font-weight: bold; transition: all 0.3s;
+    }
+    .btn-primary { background: #3366FF; color: white; }
+    .btn-primary:hover { background: #2850CC; }
+    .btn-success { background: #4CAF50; color: white; }
+    .btn-success:hover { background: #388E3C; }
+    .btn-clear { background: #9E9E9E; color: white; }
+    .btn-clear:hover { background: #757575; }
+    #route-info { margin-top: 15px; padding: 15px; background: #f5f5f5; border-radius: 5px; font-size: 13px; }
+    .route-item { padding: 8px; margin: 5px 0; background: white; border-left: 4px solid #3366FF; border-radius: 3px; }
+    .distance-info { color: #FF5722; font-weight: bold; }
+    .loading { text-align: center; color: #666; padding: 10px; }
+    .error-box {
+      background: #FFEBEE; padding: 10px; border-radius: 5px; margin-top: 10px;
+      font-size: 12px; color: #C62828; border-left: 4px solid #F44336;
+    }
+    .tabs { display: flex; margin-bottom: 15px; border-bottom: 2px solid #ddd; }
+    .tab {
+      padding: 10px 20px; cursor: pointer; border: none; background: none;
+      font-size: 14px; color: #666; transition: all 0.3s;
+    }
+    .tab.active { color: #3366FF; border-bottom: 3px solid #3366FF; margin-bottom: -2px; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .excel-template {
+      background: #E3F2FD; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 12px;
+    }
+    .excel-template code { background: white; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+
+    /* marker 圆点样式（用DOM叠加，保持你原先“编号圆点”风格） */
+    .num-marker {
+      width: 35px; height: 35px; border-radius: 50%;
+      color: white; display: flex; align-items: center; justify-content: center;
+      font-weight: bold; font-size: 16px;
+      border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    }
+  </style>
+</head>
+
+<body>
+  <div id="control-panel">
+    <h2>📍 网点路线优化系统（百度地图）</h2>
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('excel')">📊 Excel导入</button>
+      <button class="tab" onclick="switchTab('manual')">✏️ 手动输入</button>
+    </div>
+
+    <div id="excel-tab" class="tab-content active">
+      <div class="excel-template">
+        <strong>📋 Excel格式要求：</strong><br>
+        列名：<code>经度</code> <code>纬度</code> <code>网点名称</code> <code>备注(可选)</code>
+      </div>
+
+      <div class="input-group">
+        <label>选择Excel文件</label>
+        <input type="file" id="excelFile" accept=".xlsx,.xls" onchange="handleExcelUpload()">
+      </div>
+    </div>
+
+    <div id="manual-tab" class="tab-content">
+      <div class="input-group">
+        <label>网点数据（格式：经度,纬度,名称,备注可选）</label>
+        <textarea id="locationInput" rows="8"
+          placeholder="116.397428,39.90923,北京营业部,备注A
+116.404,39.915,朝阳支行
+116.326,39.989,海淀支行,重点拜访">
+116.397428,39.90923,北京营业部,起点
+116.404,39.915,朝阳支行
+116.326,39.989,海淀支行,重点拜访
+116.368,39.867,丰台支行
+116.481,39.990,顺义支行
+        </textarea>
+      </div>
+    </div>
+
+    <div class="input-group">
+      <label>起始网点（可选：填“网点名称”匹配）</label>
+      <input type="text" id="startPoint" placeholder="留空则默认使用第1行作为起点（优化时也可自动）">
+    </div>
+
+    <div>
+      <button class="btn btn-primary" onclick="optimizeRoute()">🚀 优化路线</button>
+      <button class="btn btn-success" onclick="calculateRoute()">📏 按序计算</button>
+      <button class="btn btn-clear" onclick="clearMap()">🗑️ 清除</button>
+    </div>
+
+    <div id="route-info"></div>
+  </div>
+
+  <div id="container"></div>
+
+  <!-- 配置文件 -->
+  <script src="/static/config.js"></script>
+
+  <!-- 百度地图JS（加载完成后 initMap） -->
+  <script>
+    // 提前定义 showError 函数，供加载脚本使用
+    function showError(message) {
+      const routeInfo = document.getElementById('route-info');
+      if (routeInfo) {
+        routeInfo.innerHTML = '<div class="error-box">❌ ' + message + '</div>';
+      } else {
+        // 如果元素还不存在，使用 alert 作为后备
+        alert('错误：' + message);
+      }
+    }
+
+    (function () {
+      // 等待 config.js 加载完成
+      function waitForConfig(callback, maxAttempts = 50) {
+        if (window.BMAP_CONFIG) {
+          callback();
+          return;
+        }
+        if (maxAttempts <= 0) {
+          showError("配置文件加载超时！请检查 static/config.js 是否存在");
+          return;
+        }
+        setTimeout(() => waitForConfig(callback, maxAttempts - 1), 100);
+      }
+
+      waitForConfig(function() {
+        const ak = window.BMAP_CONFIG.jsAk;
+        if (!ak || ak.includes("替换")) {
+          showError("⚠️ 请在 static/config.js 中配置有效的 jsAk");
+          console.warn("⚠️ 请在 static/config.js 中配置 jsAk");
+          return;
+        }
+
+        const script = document.createElement("script");
+        // 使用callback参数确保API完全加载后再初始化
+        script.src = "https://api.map.baidu.com/api?v=3.0&ak=" + encodeURIComponent(ak) + "&callback=baiduMapInit";
+        script.onerror = function () {
+          showError("百度地图JS加载失败！请检查：<br>1. jsAk是否正确<br>2. 域名白名单/Referer限制<br>3. 网络是否正常<br>4. 浏览器控制台是否有详细错误信息");
+        };
+        document.head.appendChild(script);
+      });
+    })();
+  </script>
+
+  <script>
+    let map;
+    let markers = [];
+    let overlays = []; // label / polyline
+    let currentLocations = []; // Excel导入结果
+
+    // 定义全局回调函数，供百度地图API调用
+    window.baiduMapInit = function() {
+      if (typeof BMap !== 'undefined') {
+        initMap();
+      } else {
+        showError("百度地图API对象未初始化，请检查AK配置和网络连接");
+      }
+    };
+
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+
+      if (tabName === 'excel') {
+        document.querySelector('.tab:first-child').classList.add('active');
+        document.getElementById('excel-tab').classList.add('active');
+      } else {
+        document.querySelector('.tab:last-child').classList.add('active');
+        document.getElementById('manual-tab').classList.add('active');
+      }
+    }
+
+    function initMap() {
+      if (typeof BMap === 'undefined') {
+        showError("百度地图API未加载成功");
+        return;
+      }
+      map = new BMap.Map("container");
+      const center = new BMap.Point(116.397428, 39.90923);
+      map.centerAndZoom(center, 11);
+      map.enableScrollWheelZoom(true);
+    }
+
+    function showLoading(message) {
+      document.getElementById('route-info').innerHTML =
+        '<div class="loading">' + message + '</div>';
+    }
+
+    function clearMap() {
+      if (!map) return;
+      markers.forEach(m => map.removeOverlay(m));
+      overlays.forEach(o => map.removeOverlay(o));
+      markers = [];
+      overlays = [];
+      currentLocations = [];
+      document.getElementById('route-info').innerHTML = '';
+    }
+
+    function parseLocationData() {
+      const input = document.getElementById('locationInput').value.trim();
+      if (!input) {
+        showError('请输入网点数据！');
+        return [];
+      }
+      const lines = input.split('\n');
+      const locations = [];
+      const errors = [];
+
+      lines.forEach((line, idx) => {
+        const t = line.trim();
+        if (!t) return;
+        const parts = t.split(',');
+        if (parts.length < 3) {
+          errors.push(`第${idx + 1}行：格式错误（至少需要 经度,纬度,名称）`);
+          return;
+        }
+        const lng = parseFloat(parts[0].trim());
+        const lat = parseFloat(parts[1].trim());
+        const name = parts[2].trim();
+        const remark = parts.slice(3).join(',').trim(); // 备注可含逗号
+        if (Number.isNaN(lng) || Number.isNaN(lat)) {
+          errors.push(`第${idx + 1}行：经纬度格式错误`);
+          return;
+        }
+        locations.push({ lng, lat, name, remark });
+      });
+
+      if (errors.length) {
+        showError(errors.join('<br>'));
+        return [];
+      }
+      return locations;
+    }
+
+    async function handleExcelUpload() {
+      const fileInput = document.getElementById('excelFile');
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      showLoading('📤 正在上传文件...');
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const resp = await fetch('/upload_excel', { method: 'POST', body: formData });
+        const data = await resp.json();
+        if (data.error) return showError(data.error);
+
+        currentLocations = data.locations || [];
+        document.getElementById('route-info').innerHTML =
+          `<div style="padding:10px;background:#4CAF50;color:white;border-radius:5px;">
+            ✅ 成功导入 ${currentLocations.length} 个网点
+          </div>`;
+
+        // 填充到手动框
+        if (currentLocations.length) {
+          document.getElementById('locationInput').value =
+            currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || ""].filter(x => x !== "").join(',')).join('\n');
+        }
+
+        // 仅画点（不算路线）
+        drawPoints(currentLocations);
+      } catch (e) {
+        showError('上传失败：' + e);
+      }
+    }
+
+    function colorByIndex(i, total) {
+      // 所有标记统一使用亮蓝色
+      return '#2196F3';
+    }
+
+    function createNumberMarker(point, number, total) {
+      // 参考 test.html 的方式创建圆圈数字标识
+      const markerContent = document.createElement('div');
+      const bgColor = colorByIndex(number - 1, total);
+      markerContent.style.cssText = `
+        width: 35px;
+        height: 35px;
+        border-radius: 50%;
+        background: ${bgColor};
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: bold;
+        font-size: 16px;
+        border: 3px solid white;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+        position: absolute;
+        z-index: 10000;
+        pointer-events: none;
+        cursor: pointer;
+      `;
+      markerContent.innerHTML = String(number);
+      markerContent.setAttribute('data-marker-number', number);
+
+      // 百度地图使用自定义 Icon 的方式（占位用）
+      const icon = new BMap.Icon(
+        "data:image/svg+xml;base64," + btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>`),
+        new BMap.Size(1, 1)
+      );
+
+      const marker = new BMap.Marker(point, {
+        icon,
+        offset: new BMap.Size(0, 0),
+        enableDragging: false
+      });
+      marker.setLabel(new BMap.Label('', { offset: new BMap.Size(-9999, -9999) })); // 占位
+
+      // 使用DOM覆盖物实现圆圈数字标识（参考 test.html 的实现方式）
+      // 创建自定义 Overlay 类
+      function NumberMarkerOverlay(point, content) {
+        this._point = point;
+        this._content = content;
+      }
+      
+      NumberMarkerOverlay.prototype = new BMap.Overlay();
+      NumberMarkerOverlay.prototype.initialize = function(map) {
+        this._map = map;
+        // 使用 markerPane 确保显示在最上层
+        const pane = map.getPanes().markerPane || map.getPanes().labelPane;
+        if (pane) {
+          pane.appendChild(this._content);
+          this._pane = pane;
+        }
+        return this._content;
+      };
+      
+      NumberMarkerOverlay.prototype.draw = function() {
+        if (this._content && this._map) {
+          try {
+            const pixel = this._map.pointToOverlayPixel(this._point);
+            this._content.style.position = 'absolute';
+            this._content.style.left = (pixel.x - 17.5) + 'px';
+            this._content.style.top = (pixel.y - 17.5) + 'px';
+            this._content.style.display = 'flex';
+            this._content.style.visibility = 'visible';
+            this._content.style.zIndex = '10000';
+          } catch(e) {
+            console.warn('绘制标记失败:', e);
+          }
+        }
+      };
+      
+      const overlay = new NumberMarkerOverlay(point, markerContent);
+
+      // 先添加 overlay，确保圆圈数字显示
+      map.addOverlay(overlay);
+      overlays.push(overlay);
+      
+      // 强制触发一次绘制，确保圆圈数字立即显示
+      setTimeout(() => {
+        if (overlay.draw) {
+          overlay.draw();
+        }
+      }, 100);
+
+      return marker;
+    }
+
+    function drawPoints(locations) {
+      clearMap();
+      if (!map || !locations.length) return;
+
+      const pts = [];
+      locations.forEach((loc, idx) => {
+        const pt = new BMap.Point(loc.lng, loc.lat);
+        pts.push(pt);
+
+        const marker = createNumberMarker(pt, idx + 1, locations.length);
+        map.addOverlay(marker);
+        markers.push(marker);
+
+        // 标注信息使用备注内容，而不是网点名称
+        const labelText = loc.remark ? `${idx + 1}. ${loc.remark}` : `${idx + 1}. ${loc.name}`;
+        const offsetX = (idx % 2 === 0) ? 30 : -30;
+        const offsetY = (idx % 4 < 2) ? -15 : 10;
+        const label = new BMap.Label(labelText, { offset: new BMap.Size(offsetX, offsetY) });
+        label.setStyle({
+          background: 'white',
+          border: '2px solid #2196F3',
+          padding: '5px 10px',
+          borderRadius: '5px',
+          fontSize: '13px',
+          fontWeight: 'bold',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+          whiteSpace: 'nowrap'
+        });
+        marker.setLabel(label);
+
+        // 地图标记信息使用备注字段
+        const infoHtml = `
+          <div style="padding:10px;">
+            <h4 style="margin:0 0 10px 0;color:#3366FF;">第 ${idx + 1} 站：${loc.name}</h4>
+            ${loc.remark ? `<p style="margin:5px 0;font-size:14px;color:#FF9800;font-weight:bold;">${loc.remark}</p>` : '<p style="margin:5px 0;font-size:12px;color:#999;">无备注</p>'}
+            <p style="margin:5px 0;font-size:12px;color:#666;">经度: ${loc.lng}</p>
+            <p style="margin:5px 0;font-size:12px;color:#666;">纬度: ${loc.lat}</p>
+          </div>`;
+        marker.addEventListener('click', () => {
+          const win = new BMap.InfoWindow(infoHtml);
+          map.openInfoWindow(win, pt);
+        });
+      });
+
+      map.setViewport(pts);
+    }
+
+    function drawRouteResult(result) {
+      const { route, polyline, legs, total_distance, total_duration } = result;
+
+      // 先绘制标记点
+      drawPoints(route);
+      
+      // 确保标记点绘制完成后再绘制路线
+      setTimeout(() => {
+        // 强制重绘所有 overlay，确保圆圈数字显示
+        overlays.forEach(overlay => {
+          if (overlay && overlay.draw) {
+            try {
+              overlay.draw();
+            } catch(e) {
+              console.warn('重绘 overlay 失败:', e);
+            }
+          }
+        });
+      }, 200);
+
+      if (polyline && polyline.length) {
+        const pts = polyline.map(p => new BMap.Point(p[0], p[1]));
+        // 使用亮蓝色显示路线
+        const line = new BMap.Polyline(pts, { strokeWeight: 5, strokeOpacity: 0.9, strokeColor: "#2196F3" });
+        map.addOverlay(line);
+        overlays.push(line);
+        
+        // 在路线旁标注距离
+        if (legs && legs.length > 0) {
+          legs.forEach((leg) => {
+            if (leg.mid_point && leg.mid_point.length === 2) {
+              const midPoint = new BMap.Point(leg.mid_point[0], leg.mid_point[1]);
+              const label = new BMap.Label(leg.distance_text, {
+                offset: new BMap.Size(10, -10)
+              });
+              label.setStyle({
+                background: 'rgba(255, 152, 0, 0.95)',
+                color: 'white',
+                border: '2px solid white',
+                padding: '5px 10px',
+                borderRadius: '5px',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+                whiteSpace: 'nowrap',
+                zIndex: 1000
+              });
+              label.setPosition(midPoint);
+              map.addOverlay(label);
+              overlays.push(label);
+            }
+          });
+        }
+        
+        map.setViewport(pts);
+      }
+
+      // 左侧面板 - 使用网点名称字段
+      let html = '<h3 style="color:#3366FF;margin-bottom:10px;">📋 路线详情</h3>';
+      (legs || []).forEach((lg, i) => {
+        html += `
+          <div class="route-item">
+            <strong>${i + 1}. ${lg.from}</strong> → <strong>${i + 2}. ${lg.to}</strong>
+            <div class="distance-info">${lg.distance_text} · ${lg.duration_text}</div>
+          </div>`;
+      });
+      html += `
+        <div style="margin-top:15px;padding:10px;background:#E3F2FD;border-radius:5px;font-weight:bold;">
+          <div style="color:#1976D2;">总网点数：${route.length} 个</div>
+          <div style="color:#FF5722;font-size:16px;margin-top:5px;">
+            总距离：${formatMeters(total_distance)} · 总用时：${formatSeconds(total_duration)}
+          </div>
+        </div>`;
+      document.getElementById('route-info').innerHTML = html;
+    }
+
+    function formatMeters(m) {
+      if (m >= 1000) return (m / 1000).toFixed(2) + " 公里";
+      return Math.round(m) + " 米";
+    }
+    function formatSeconds(s) {
+      s = Math.round(s);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      if (h > 0) return `${h}小时${m}分钟`;
+      return `${m}分钟`;
+    }
+
+    async function calculateRoute() {
+      const locations = currentLocations.length ? currentLocations : parseLocationData();
+      if (locations.length < 2) return showError('至少需要2个网点！');
+
+      showLoading('📏 正在按序计算驾车路线...');
+      try {
+        const resp = await fetch('/calculate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locations })
+        });
+        const data = await resp.json();
+        if (data.error) return showError(data.error);
+        drawRouteResult(data);
+      } catch (e) {
+        showError('计算失败：' + e);
+      }
+    }
+
+    async function optimizeRoute() {
+      const locations = currentLocations.length ? currentLocations : parseLocationData();
+      if (locations.length < 2) return showError('至少需要2个网点！');
+
+      const startName = document.getElementById('startPoint').value.trim() || null;
+      showLoading('🔄 正在优化顺序并规划驾车路线...');
+
+      try {
+        const resp = await fetch('/optimize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locations, start_name: startName })
+        });
+        const data = await resp.json();
+        if (data.error) return showError(data.error);
+        drawRouteResult(data);
+      } catch (e) {
+        showError('优化失败：' + e);
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>网点路线优化系统</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+        }
+        
+        #container {
+            width: 100%;
+            height: 100vh;
+        }
+        
+        #control-panel {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            max-width: 380px;
+            z-index: 1000;
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+        
+        h2 {
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 18px;
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+            font-size: 13px;
+        }
+        
+        textarea, input[type="text"], input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 12px;
+            font-family: inherit;
+        }
+        
+        textarea {
+            resize: vertical;
+        }
+        
+        input[type="file"] {
+            padding: 8px;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            margin: 5px 5px 5px 0;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: bold;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: #3366FF;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #2850CC;
+        }
+        
+        .btn-success {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #388E3C;
+        }
+        
+        .btn-upload {
+            background: #9C27B0;
+            color: white;
+        }
+        
+        .btn-upload:hover {
+            background: #7B1FA2;
+        }
+        
+        .btn-clear {
+            background: #9E9E9E;
+            color: white;
+        }
+        
+        .btn-clear:hover {
+            background: #757575;
+        }
+        
+        #route-info {
+            margin-top: 15px;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 5px;
+            font-size: 13px;
+        }
+        
+        .route-item {
+            padding: 8px;
+            margin: 5px 0;
+            background: white;
+            border-left: 4px solid #3366FF;
+            border-radius: 3px;
+        }
+        
+        .distance-info {
+            color: #FF5722;
+            font-weight: bold;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #666;
+            padding: 10px;
+        }
+        
+        .tip-box {
+            background: #E3F2FD;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-size: 12px;
+            color: #1976D2;
+            border-left: 4px solid #2196F3;
+        }
+        
+        .error-box {
+            background: #FFEBEE;
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            font-size: 12px;
+            color: #C62828;
+            border-left: 4px solid #F44336;
+        }
+        
+        .tabs {
+            display: flex;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #ddd;
+        }
+        
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 14px;
+            color: #666;
+            transition: all 0.3s;
+        }
+        
+        .tab.active {
+            color: #3366FF;
+            border-bottom: 3px solid #3366FF;
+            margin-bottom: -2px;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .excel-template {
+            background: #E3F2FD;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            font-size: 12px;
+        }
+        
+        .excel-template code {
+            background: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div id="control-panel">
+        <h2>📍 网点路线优化系统</h2>
+        
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('excel')">📊 Excel导入</button>
+            <button class="tab" onclick="switchTab('manual')">✏️ 手动输入</button>
+        </div>
+        
+        <!-- Excel导入标签页 -->
+        <div id="excel-tab" class="tab-content active">
+            <div class="excel-template">
+                <strong>📋 Excel格式要求：</strong><br>
+                列名：<code>经度</code> <code>纬度</code> <code>网点名称</code>
+            </div>
+            
+            <div class="input-group">
+                <label>选择Excel文件</label>
+                <input type="file" id="excelFile" accept=".xlsx,.xls" onchange="handleExcelUpload()">
+            </div>
+        </div>
+        
+        <!-- 手动输入标签页 -->
+        <div id="manual-tab" class="tab-content">
+            <div class="input-group">
+                <label>网点数据（格式：经度,纬度,名称）</label>
+                <textarea id="locationInput" rows="8" placeholder="116.397428,39.90923,北京营业部
+116.404,39.915,朝阳支行
+116.326,39.989,海淀支行">116.397428,39.90923,北京营业部
+116.404,39.915,朝阳支行
+116.326,39.989,海淀支行
+116.368,39.867,丰台支行
+116.481,39.990,顺义支行</textarea>
+            </div>
+        </div>
+        
+        <div class="input-group">
+            <label>起始网点（可选）</label>
+            <input type="text" id="startPoint" placeholder="留空则自动选择最优起点">
+        </div>
+        
+        <div>
+            <button class="btn btn-primary" onclick="optimizeRoute()">🚀 优化路线</button>
+            <button class="btn btn-success" onclick="calculateRoute()">📏 按序计算</button>
+            <button class="btn btn-clear" onclick="clearMap()">🗑️ 清除</button>
+        </div>
+        
+        <div id="route-info"></div>
+    </div>
+    
+    <div id="container"></div>
+
+    <!-- 引入API配置文件 -->
+    <script src="/static/config.js"></script>
+    
+    <script>
+        // 配置安全密钥（如果有的话）
+        if (window.AMAP_CONFIG && window.AMAP_CONFIG.securityJsCode) {
+            window._AMapSecurityConfig = {
+                securityJsCode: window.AMAP_CONFIG.securityJsCode
+            };
+        }
+    </script>
+    
+    <!-- 动态加载高德地图API -->
+    <script>
+        (function() {
+            if (!window.AMAP_CONFIG) {
+                alert('错误：配置文件加载失败！\n请检查 static/config.js 是否存在');
+                return;
+            }
+            
+            if (window.AMAP_CONFIG.key === '请替换为你的高德API_Key') {
+                console.error('⚠️ 请在 static/config.js 中配置你的高德API Key');
+            }
+            
+            var script = document.createElement('script');
+            script.src = 'https://webapi.amap.com/maps?v=' + window.AMAP_CONFIG.version + '&key=' + window.AMAP_CONFIG.key + '&plugin=AMap.Scale,AMap.ToolBar';
+            script.onerror = function() {
+                alert('高德地图API加载失败！\n请检查：\n1. API Key是否正确\n2. 网络连接是否正常\n3. 白名单是否配置（localhost, 127.0.0.1）');
+            };
+            script.onload = function() {
+                console.log('✅ 高德地图API加载完成');
+            };
+            document.head.appendChild(script);
+        })();
+    </script>
+    
+    <script>
+        var map;
+        var markers = [];
+        var polylines = [];
+        var labels = [];
+        var currentLocations = [];
+
+        // 等待高德地图API加载完成
+        function initMap() {
+            if (typeof AMap === 'undefined') {
+                showError('地图API加载失败，请检查：<br>1. API Key是否正确<br>2. 网络连接是否正常<br>3. 白名单是否配置');
+                return;
+            }
+
+            try {
+                map = new AMap.Map('container', {
+                    zoom: 11,
+                    center: [116.397428, 39.90923],
+                    viewMode: '2D'
+                });
+
+                // 安全地添加控件，如果控件不存在则跳过
+                try {
+                    if (AMap.Scale) {
+                        map.addControl(new AMap.Scale());
+                    }
+                } catch(e) {
+                    console.warn('Scale控件加载失败:', e);
+                }
+
+                try {
+                    if (AMap.ToolBar) {
+                        map.addControl(new AMap.ToolBar({ position: 'RB' }));
+                    }
+                } catch(e) {
+                    console.warn('ToolBar控件加载失败:', e);
+                }
+                
+                console.log('✅ 地图初始化成功');
+            } catch(e) {
+                showError('地图初始化失败：' + e.message + '<br>请检查API Key配置');
+                console.error('地图初始化错误:', e);
+            }
+        }
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            if (tabName === 'excel') {
+                document.querySelector('.tab:first-child').classList.add('active');
+                document.getElementById('excel-tab').classList.add('active');
+            } else {
+                document.querySelector('.tab:last-child').classList.add('active');
+                document.getElementById('manual-tab').classList.add('active');
+            }
+        }
+
+        function handleExcelUpload() {
+            var fileInput = document.getElementById('excelFile');
+            var file = fileInput.files[0];
+            
+            if (!file) return;
+            
+            document.getElementById('route-info').innerHTML = '<div class="loading">📤 正在上传文件...</div>';
+            
+            var formData = new FormData();
+            formData.append('file', file);
+            
+            fetch('/upload_excel', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showError(data.error);
+                } else {
+                    currentLocations = data.locations;
+                    document.getElementById('route-info').innerHTML = 
+                        `<div style="padding: 10px; background: #4CAF50; color: white; border-radius: 5px;">
+                            ✅ 成功导入 ${currentLocations.length} 个网点
+                        </div>`;
+                    
+                    // 将导入的数据填充到手动输入框中
+                    if (currentLocations.length > 0) {
+                        var manualInputText = currentLocations.map(function(loc) {
+                            return loc.lng + ',' + loc.lat + ',' + loc.name;
+                        }).join('\n');
+                        document.getElementById('locationInput').value = manualInputText;
+                        console.log('✅ 数据已填充到手动输入框');
+                    }
+                    
+                    // 自动在地图上显示导入的网点
+                    console.log('✅ 导入成功，网点数量:', currentLocations.length);
+                    console.log('地图对象状态:', map ? '已初始化' : '未初始化');
+                    
+                    if (currentLocations.length > 0 && map) {
+                        try {
+                            console.log('开始在地图上显示网点...');
+                            drawRoute(currentLocations);
+                            console.log('✅ 网点已显示在地图上');
+                            
+                            // 调整地图视野以显示所有网点
+                            if (currentLocations.length > 0) {
+                                var bounds = new AMap.Bounds();
+                                currentLocations.forEach(function(loc) {
+                                    bounds.extend([loc.lng, loc.lat]);
+                                });
+                                map.setBounds(bounds, false, [50, 50, 50, 50]);
+                                console.log('✅ 地图视野已调整');
+                            }
+                        } catch(e) {
+                            console.error('❌ 显示网点失败:', e);
+                            showError('网点已导入，但地图显示失败：' + e.message);
+                        }
+                    } else if (!map) {
+                        console.warn('⚠️ 地图未初始化，无法显示网点');
+                        showError('地图未初始化，请刷新页面重试');
+                    } else if (currentLocations.length === 0) {
+                        console.warn('⚠️ 导入的网点数据为空');
+                    }
+                }
+            })
+            .catch(error => {
+                showError('上传失败：' + error);
+            });
+        }
+
+        function parseLocationData() {
+            var input = document.getElementById('locationInput').value.trim();
+            if (!input) {
+                showError('请输入网点数据！');
+                return [];
+            }
+            
+            var lines = input.split('\n');
+            var locations = [];
+            var errors = [];
+            
+            lines.forEach(function(line, index) {
+                if (line.trim()) {
+                    var parts = line.split(',');
+                    if (parts.length >= 3) {
+                        var lng = parseFloat(parts[0].trim());
+                        var lat = parseFloat(parts[1].trim());
+                        var name = parts.slice(2).join(',').trim();
+                        
+                        if (isNaN(lng) || isNaN(lat)) {
+                            errors.push('第' + (index+1) + '行：经纬度格式错误');
+                        } else {
+                            locations.push({ lng: lng, lat: lat, name: name });
+                        }
+                    } else {
+                        errors.push('第' + (index+1) + '行：格式错误');
+                    }
+                }
+            });
+            
+            if (errors.length > 0) {
+                showError(errors.join('<br>'));
+                return [];
+            }
+            
+            return locations;
+        }
+
+        function showError(message) {
+            document.getElementById('route-info').innerHTML = 
+                '<div class="error-box">❌ ' + message + '</div>';
+        }
+
+        function calculateDistance(point1, point2) {
+            try {
+                return AMap.GeometryUtil.distance(
+                    new AMap.LngLat(point1.lng, point1.lat),
+                    new AMap.LngLat(point2.lng, point2.lat)
+                );
+            } catch(e) {
+                return 0;
+            }
+        }
+
+        function formatDistance(meters) {
+            if (meters >= 1000) {
+                return (meters / 1000).toFixed(2) + ' 公里';
+            } else {
+                return meters.toFixed(0) + ' 米';
+            }
+        }
+
+        function clearMap() {
+            markers.forEach(marker => map.remove(marker));
+            polylines.forEach(line => map.remove(line));
+            labels.forEach(label => map.remove(label));
+            markers = [];
+            polylines = [];
+            labels = [];
+            currentLocations = [];
+            document.getElementById('route-info').innerHTML = '';
+        }
+
+        function getMidPoint(point1, point2) {
+            return [(point1.lng + point2.lng) / 2, (point1.lat + point2.lat) / 2];
+        }
+
+        function createNumberedMarker(location, number, total) {
+            var markerContent = document.createElement('div');
+            markerContent.style.cssText = `
+                width: 35px;
+                height: 35px;
+                border-radius: 50%;
+                background: ${number === 1 ? '#4CAF50' : number === total ? '#FF5722' : '#3366FF'};
+                color: white;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-weight: bold;
+                font-size: 16px;
+                border: 3px solid white;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+            `;
+            markerContent.innerHTML = number;
+            
+            return new AMap.Marker({
+                position: [location.lng, location.lat],
+                content: markerContent,
+                offset: new AMap.Pixel(-17.5, -17.5),
+                title: location.name
+            });
+        }
+
+        function drawRoute(locations) {
+            clearMap();
+            var totalDistance = 0;
+            
+            locations.forEach(function(loc, index) {
+                var number = index + 1;
+                
+                var marker = createNumberedMarker(loc, number, locations.length);
+                map.add(marker);
+                markers.push(marker);
+                
+                // 智能偏移避免重叠
+                var offsetX, offsetY;
+                switch(number % 4) {
+                    case 1: offsetX = 30; offsetY = -15; break;
+                    case 2: offsetX = 30; offsetY = 10; break;
+                    case 3: offsetX = -30; offsetY = -15; break;
+                    case 0: offsetX = -30; offsetY = 10; break;
+                }
+                
+                var nameLabel = new AMap.Text({
+                    text: `${number}. ${loc.name}`,
+                    position: [loc.lng, loc.lat],
+                    offset: new AMap.Pixel(offsetX, offsetY),
+                    style: {
+                        'background': 'white',
+                        'border': '2px solid #3366FF',
+                        'padding': '5px 10px',
+                        'border-radius': '5px',
+                        'font-size': '13px',
+                        'font-weight': 'bold',
+                        'box-shadow': '0 2px 6px rgba(0,0,0,0.3)',
+                        'white-space': 'nowrap'
+                    }
+                });
+                map.add(nameLabel);
+                labels.push(nameLabel);
+                
+                if (index > 0) {
+                    var prevLoc = locations[index - 1];
+                    var polyline = new AMap.Polyline({
+                        path: [[prevLoc.lng, prevLoc.lat], [loc.lng, loc.lat]],
+                        strokeColor: '#3366FF',
+                        strokeWeight: 5,
+                        strokeOpacity: 0.8,
+                        showDir: true,
+                        dirColor: '#FF5722'
+                    });
+                    map.add(polyline);
+                    polylines.push(polyline);
+                    
+                    var distance = calculateDistance(prevLoc, loc);
+                    totalDistance += distance;
+                    
+                    var midPoint = getMidPoint(prevLoc, loc);
+                    var distanceLabel = new AMap.Text({
+                        text: formatDistance(distance),
+                        position: midPoint,
+                        style: {
+                            'background': '#FFF9C4',
+                            'border': '2px solid #FFA000',
+                            'padding': '4px 8px',
+                            'border-radius': '3px',
+                            'font-size': '12px',
+                            'color': '#F57C00',
+                            'font-weight': 'bold'
+                        }
+                    });
+                    map.add(distanceLabel);
+                    labels.push(distanceLabel);
+                }
+                
+                marker.on('click', function() {
+                    var infoWindow = new AMap.InfoWindow({
+                        content: `
+                            <div style="padding: 10px;">
+                                <h4 style="margin: 0 0 10px 0; color: #3366FF;">
+                                    第 ${number} 站：${loc.name}
+                                </h4>
+                                <p style="margin: 5px 0; font-size: 12px;">经度: ${loc.lng}</p>
+                                <p style="margin: 5px 0; font-size: 12px;">纬度: ${loc.lat}</p>
+                                ${index > 0 ? `<p style="margin: 5px 0; font-size: 12px; color: #FF5722;">
+                                    距上一站: ${formatDistance(calculateDistance(locations[index-1], loc))}
+                                </p>` : '<p style="margin: 5px 0; font-size: 12px; color: #4CAF50;">起点</p>'}
+                            </div>
+                        `
+                    });
+                    infoWindow.open(map, marker.getPosition());
+                });
+            });
+            
+            displayRouteInfo(locations, totalDistance);
+            map.setFitView();
+        }
+
+        function displayRouteInfo(locations, totalDistance) {
+            var html = '<h3 style="color: #3366FF; margin-bottom: 10px;">📋 路线详情</h3>';
+            
+            locations.forEach(function(loc, index) {
+                if (index > 0) {
+                    var distance = calculateDistance(locations[index-1], loc);
+                    html += `
+                        <div class="route-item">
+                            <strong>${index}. ${locations[index-1].name}</strong> 
+                            → <strong>${index+1}. ${loc.name}</strong>
+                            <div class="distance-info">${formatDistance(distance)}</div>
+                        </div>
+                    `;
+                } else {
+                    html += `
+                        <div class="route-item" style="border-left-color: #4CAF50;">
+                            <strong>🚩 起点：1. ${loc.name}</strong>
+                        </div>
+                    `;
+                }
+            });
+            
+            html += `
+                <div style="margin-top: 15px; padding: 10px; background: #E3F2FD; border-radius: 5px; font-weight: bold;">
+                    <div style="color: #1976D2;">总网点数：${locations.length} 个</div>
+                    <div style="color: #FF5722; font-size: 16px; margin-top: 5px;">
+                        总距离：${formatDistance(totalDistance)}
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('route-info').innerHTML = html;
+        }
+
+        function optimizeRoute() {
+            var locations = currentLocations.length > 0 ? currentLocations : parseLocationData();
+            
+            if (locations.length < 2) {
+                showError('至少需要2个网点！');
+                return;
+            }
+            
+            var startName = document.getElementById('startPoint').value.trim();
+            
+            document.getElementById('route-info').innerHTML = '<div class="loading">🔄 正在优化路线...</div>';
+            
+            fetch('/optimize', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    locations: locations,
+                    start_name: startName || null
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    showError(data.error);
+                } else {
+                    drawRoute(data.route);
+                }
+            })
+            .catch(error => {
+                showError('优化失败：' + error);
+            });
+        }
+
+        function calculateRoute() {
+            var locations = currentLocations.length > 0 ? currentLocations : parseLocationData();
+            
+            if (locations.length < 2) {
+                showError('至少需要2个网点！');
+                return;
+            }
+            
+            drawRoute(locations);
+        }
+
+        // 等待地图API加载完成
+        function waitForAMap(callback, maxAttempts) {
+            maxAttempts = maxAttempts || 50; // 最多尝试50次，约5秒
+            var attempts = 0;
+            
+            function check() {
+                attempts++;
+                if (typeof AMap !== 'undefined' && AMap.Map) {
+                    console.log('✅ AMap API已加载，开始初始化地图');
+                    callback();
+                } else if (attempts < maxAttempts) {
+                    setTimeout(check, 100);
+                } else {
+                    showError('高德地图API加载超时！<br><br>请检查：<br>' +
+                             '1. API Key是否正确填写<br>' +
+                             '2. 网络连接是否正常<br>' +
+                             '3. 白名单是否添加（localhost, 127.0.0.1）<br>' +
+                             '4. 浏览器控制台（F12）查看详细错误');
+                }
+            }
+            check();
+        }
+
+        window.onload = function() {
+            waitForAMap(function() {
+                try {
+                    initMap();
+                } catch(error) {
+                    showError('地图初始化失败：' + error.message + '<br>请按F12查看详细错误');
+                    console.error('详细错误：', error);
+                }
+            });
+        };
+    </script>
+</body>
+</html>
