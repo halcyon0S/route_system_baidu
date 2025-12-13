@@ -32,7 +32,7 @@ if errorlevel 1 (
     echo.
     echo 提示：
     echo 1. 首次运行可能需要几秒钟启动
-    echo 2. 程序会在 http://127.0.0.1:5004 启动
+    echo 2. 程序会在 http://127.0.0.1:5005 启动
     echo 3. 请在浏览器中打开该地址使用
     echo.
     pause

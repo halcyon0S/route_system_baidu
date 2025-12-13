@@ -6,7 +6,6 @@
   <title>网点路线优化系统（百度地图版）</title>
 
   <style>
-    /* ====== 这里基本照搬你提供文件的样式 ====== */
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif; }
     #container { width: 100%; height: 100vh; }
@@ -67,16 +66,16 @@
 
 <body>
   <div id="control-panel">
-    <h2>📍 网点路线优化系统（百度地图）</h2>
+    <h2>� 网点路线优化系统（百度地图）</h2>
 
     <div class="tabs">
-      <button class="tab active" onclick="switchTab('excel')">📊 Excel导入</button>
+      <button class="tab active" onclick="switchTab('excel')">� Excel导入</button>
       <button class="tab" onclick="switchTab('manual')">✏️ 手动输入</button>
     </div>
 
     <div id="excel-tab" class="tab-content active">
       <div class="excel-template">
-        <strong>📋 Excel格式要求：</strong><br>
+        <strong>� Excel格式要求：</strong><br>
         列名：<code>经度</code> <code>纬度</code> <code>网点名称</code> <code>备注(可选)</code>
       </div>
 
@@ -92,8 +91,7 @@
         <textarea id="locationInput" rows="8"
           placeholder="116.397428,39.90923,北京营业部,备注A
 116.404,39.915,朝阳支行
-116.326,39.989,海淀支行,重点拜访">
-116.397428,39.90923,北京营业部,起点
+116.326,39.989,海淀支行,重点拜访">116.397428,39.90923,北京营业部,起点
 116.404,39.915,朝阳支行
 116.326,39.989,海淀支行,重点拜访
 116.368,39.867,丰台支行
@@ -108,9 +106,25 @@
     </div>
 
     <div>
-      <button class="btn btn-primary" onclick="optimizeRoute()">🚀 优化路线</button>
-      <button class="btn btn-success" onclick="calculateRoute()">📏 按序计算</button>
-      <button class="btn btn-clear" onclick="clearMap()">🗑️ 清除</button>
+      <button class="btn btn-primary" onclick="optimizeRoute()">� 优化路线</button>
+      <button class="btn btn-success" onclick="calculateRoute()">� 按序计算</button>
+      <button class="btn btn-clear" onclick="clearMap()">�️ 清除</button>
+    </div>
+
+    <!-- ✅ 最远线开关 -->
+    <div style="margin-top:10px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#555;font-weight:normal;">
+        <input type="checkbox" id="toggleFarthest" checked onchange="toggleFarthestLine()">
+        显示最远两点直线（绿色）
+      </label>
+    </div>
+
+    <!-- ✅ 距离标签开关 -->
+    <div style="margin-top:8px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#555;font-weight:normal;">
+        <input type="checkbox" id="toggleDistanceLabels" checked onchange="toggleDistanceLabels()">
+        显示路线距离标签（黄色）
+      </label>
     </div>
 
     <div id="route-info"></div>
@@ -129,13 +143,11 @@
       if (routeInfo) {
         routeInfo.innerHTML = '<div class="error-box">❌ ' + message + '</div>';
       } else {
-        // 如果元素还不存在，使用 alert 作为后备
         alert('错误：' + message);
       }
     }
 
     (function () {
-      // 等待 config.js 加载完成
       function waitForConfig(callback, maxAttempts = 50) {
         if (window.BMAP_CONFIG) {
           callback();
@@ -157,7 +169,6 @@
         }
 
         const script = document.createElement("script");
-        // 使用callback参数确保API完全加载后再初始化
         script.src = "https://api.map.baidu.com/api?v=3.0&ak=" + encodeURIComponent(ak) + "&callback=baiduMapInit";
         script.onerror = function () {
           showError("百度地图JS加载失败！请检查：<br>1. jsAk是否正确<br>2. 域名白名单/Referer限制<br>3. 网络是否正常<br>4. 浏览器控制台是否有详细错误信息");
@@ -170,8 +181,174 @@
   <script>
     let map;
     let markers = [];
-    let overlays = []; // label / polyline
+    let overlays = []; // label / polyline / 自定义overlay
     let currentLocations = []; // Excel导入结果
+
+    // ✅ 最远线：可开关对象引用
+    let farthestLineOverlay = null;
+    let farthestLabelOverlay = null;
+    let farthestVisible = true;
+
+    // ✅ 距离标签：可开关对象引用
+    let distanceLabels = [];  // 保存所有距离标签引用
+    let distanceLabelsVisible = true;  // 距离标签显示状态
+
+    function toggleFarthestLine() {
+      farthestVisible = document.getElementById('toggleFarthest')?.checked ?? true;
+      console.log('切换最远连线显示状态:', farthestVisible);
+
+      if (farthestLineOverlay) {
+        if (typeof farthestLineOverlay.setVisible === 'function') {
+          farthestLineOverlay.setVisible(farthestVisible);
+        } else {
+          // 如果不支持setVisible，则移除/添加
+          try {
+            if (!farthestVisible) {
+              map.removeOverlay(farthestLineOverlay);
+            } else {
+              map.addOverlay(farthestLineOverlay);
+            }
+          } catch(e) {
+            console.warn('切换最远连线显示失败:', e);
+          }
+        }
+      }
+
+      if (farthestLabelOverlay) {
+        if (typeof farthestLabelOverlay.setVisible === 'function') {
+          farthestLabelOverlay.setVisible(farthestVisible);
+        } else {
+          // 如果不支持setVisible，则移除/添加
+          try {
+            if (!farthestVisible) {
+              map.removeOverlay(farthestLabelOverlay);
+            } else {
+              map.addOverlay(farthestLabelOverlay);
+            }
+          } catch(e) {
+            console.warn('切换最远标签显示失败:', e);
+          }
+        }
+      }
+    }
+
+    function toggleDistanceLabels() {
+      distanceLabelsVisible = document.getElementById('toggleDistanceLabels')?.checked ?? true;
+      console.log('切换距离标签显示状态:', distanceLabelsVisible);
+
+      distanceLabels.forEach((label) => {
+        if (label) {
+          if (typeof label.setVisible === 'function') {
+            label.setVisible(distanceLabelsVisible);
+          } else {
+            // 如果不支持setVisible，则移除/添加
+            try {
+              if (!distanceLabelsVisible) {
+                map.removeOverlay(label);
+              } else {
+                map.addOverlay(label);
+              }
+            } catch(e) {
+              console.warn('切换距离标签显示失败:', e);
+            }
+          }
+        }
+      });
+    }
+
+    function drawFarthestLine(farthest_points) {
+      // 清理旧的
+      if (farthestLineOverlay) {
+        try {
+          map.removeOverlay(farthestLineOverlay);
+          const idx = overlays.indexOf(farthestLineOverlay);
+          if (idx > -1) overlays.splice(idx, 1);
+        } catch(e) {
+          console.warn('移除旧的最远连线失败:', e);
+        }
+      }
+      if (farthestLabelOverlay) {
+        try {
+          map.removeOverlay(farthestLabelOverlay);
+          const idx = overlays.indexOf(farthestLabelOverlay);
+          if (idx > -1) overlays.splice(idx, 1);
+        } catch(e) {
+          console.warn('移除旧的最远标签失败:', e);
+        }
+      }
+      farthestLineOverlay = null;
+      farthestLabelOverlay = null;
+
+      if (!map) {
+        console.warn('地图未初始化，无法绘制最远连线');
+        return;
+      }
+
+      if (!farthest_points || !farthest_points.point1 || !farthest_points.point2) {
+        console.log('未找到最远网点数据:', farthest_points);
+        return;
+      }
+
+      console.log('开始绘制最远网点连线:', farthest_points);
+
+      const p1 = new BMap.Point(farthest_points.point1.lng, farthest_points.point1.lat);
+      const p2 = new BMap.Point(farthest_points.point2.lng, farthest_points.point2.lat);
+
+      console.log('点1坐标:', p1.lng, p1.lat, '名称:', farthest_points.point1.name);
+      console.log('点2坐标:', p2.lng, p2.lat, '名称:', farthest_points.point2.name);
+
+      // 使用亮绿色 #00E676 (Material Design 亮绿色) 或 #00FF00 (纯绿色)
+      const line = new BMap.Polyline([p1, p2], {
+        strokeWeight: 6,  // 增加线宽，更明显
+        strokeOpacity: 1.0,  // 完全不透明
+        strokeColor: "#00FF00"  // 亮绿色
+      });
+
+      // 尝试设置虚线样式（如果API支持）
+      if (typeof line.setStrokeStyle === 'function') {
+        try {
+          line.setStrokeStyle("dashed");
+          console.log('已设置虚线样式');
+        } catch(e) {
+          console.log('虚线样式设置失败，使用实线');
+        }
+      }
+
+      map.addOverlay(line);
+      overlays.push(line);
+      farthestLineOverlay = line;
+      console.log('✓ 最远连线已添加到地图');
+
+      // 计算中点用于标注距离
+      const midPoint = new BMap.Point((p1.lng + p2.lng) / 2, (p1.lat + p2.lat) / 2);
+
+      // 标注直线距离（使用亮绿色背景）
+      const label = new BMap.Label(farthest_points.straight_distance_text || "最远直线距离", {
+        offset: new BMap.Size(0, -15)
+      });
+
+      label.setStyle({
+        background: 'rgba(0, 255, 0, 0.9)',  // 亮绿色背景
+        color: 'white',
+        border: '2px solid white',
+        padding: '6px 12px',
+        borderRadius: '5px',
+        fontSize: '13px',
+        fontWeight: 'bold',
+        boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
+        whiteSpace: 'nowrap',
+        zIndex: 1001
+      });
+
+      label.setPosition(midPoint);
+      map.addOverlay(label);
+      overlays.push(label);
+      farthestLabelOverlay = label;
+      console.log('✓ 距离标签已添加:', farthest_points.straight_distance_text);
+
+      // 按开关状态显示/隐藏
+      toggleFarthestLine();
+    }
 
     // 定义全局回调函数，供百度地图API调用
     window.baiduMapInit = function() {
@@ -219,6 +396,13 @@
       overlays = [];
       currentLocations = [];
       document.getElementById('route-info').innerHTML = '';
+
+      // ✅ 清空最远线引用
+      farthestLineOverlay = null;
+      farthestLabelOverlay = null;
+      
+      // ✅ 清空距离标签引用
+      distanceLabels = [];
     }
 
     function parseLocationData() {
@@ -242,7 +426,7 @@
         const lng = parseFloat(parts[0].trim());
         const lat = parseFloat(parts[1].trim());
         const name = parts[2].trim();
-        const remark = parts.slice(3).join(',').trim(); // 备注可含逗号
+        const remark = parts.slice(3).join(',').trim();
         if (Number.isNaN(lng) || Number.isNaN(lat)) {
           errors.push(`第${idx + 1}行：经纬度格式错误`);
           return;
@@ -262,7 +446,7 @@
       const file = fileInput.files[0];
       if (!file) return;
 
-      showLoading('📤 正在上传文件...');
+      showLoading('� 正在上传文件...');
 
       const formData = new FormData();
       formData.append('file', file);
@@ -278,13 +462,11 @@
             ✅ 成功导入 ${currentLocations.length} 个网点
           </div>`;
 
-        // 填充到手动框
         if (currentLocations.length) {
           document.getElementById('locationInput').value =
             currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || ""].filter(x => x !== "").join(',')).join('\n');
         }
 
-        // 仅画点（不算路线）
         drawPoints(currentLocations);
       } catch (e) {
         showError('上传失败：' + e);
@@ -292,12 +474,10 @@
     }
 
     function colorByIndex(i, total) {
-      // 所有标记统一使用亮蓝色
       return '#2196F3';
     }
 
     function createNumberMarker(point, number, total) {
-      // 参考 test.html 的方式创建圆圈数字标识
       const markerContent = document.createElement('div');
       const bgColor = colorByIndex(number - 1, total);
       markerContent.style.cssText = `
@@ -321,7 +501,6 @@
       markerContent.innerHTML = String(number);
       markerContent.setAttribute('data-marker-number', number);
 
-      // 百度地图使用自定义 Icon 的方式（占位用）
       const icon = new BMap.Icon(
         "data:image/svg+xml;base64," + btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>`),
         new BMap.Size(1, 1)
@@ -332,19 +511,16 @@
         offset: new BMap.Size(0, 0),
         enableDragging: false
       });
-      marker.setLabel(new BMap.Label('', { offset: new BMap.Size(-9999, -9999) })); // 占位
+      marker.setLabel(new BMap.Label('', { offset: new BMap.Size(-9999, -9999) }));
 
-      // 使用DOM覆盖物实现圆圈数字标识（参考 test.html 的实现方式）
-      // 创建自定义 Overlay 类
       function NumberMarkerOverlay(point, content) {
         this._point = point;
         this._content = content;
       }
-      
+
       NumberMarkerOverlay.prototype = new BMap.Overlay();
       NumberMarkerOverlay.prototype.initialize = function(map) {
         this._map = map;
-        // 使用 markerPane 确保显示在最上层
         const pane = map.getPanes().markerPane || map.getPanes().labelPane;
         if (pane) {
           pane.appendChild(this._content);
@@ -352,7 +528,7 @@
         }
         return this._content;
       };
-      
+
       NumberMarkerOverlay.prototype.draw = function() {
         if (this._content && this._map) {
           try {
@@ -368,14 +544,12 @@
           }
         }
       };
-      
+
       const overlay = new NumberMarkerOverlay(point, markerContent);
 
-      // 先添加 overlay，确保圆圈数字显示
       map.addOverlay(overlay);
       overlays.push(overlay);
-      
-      // 强制触发一次绘制，确保圆圈数字立即显示
+
       setTimeout(() => {
         if (overlay.draw) {
           overlay.draw();
@@ -398,7 +572,6 @@
         map.addOverlay(marker);
         markers.push(marker);
 
-        // 标注信息使用备注内容，而不是网点名称
         const labelText = loc.remark ? `${idx + 1}. ${loc.remark}` : `${idx + 1}. ${loc.name}`;
         const offsetX = (idx % 2 === 0) ? 30 : -30;
         const offsetY = (idx % 4 < 2) ? -15 : 10;
@@ -411,11 +584,24 @@
           fontSize: '13px',
           fontWeight: 'bold',
           boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-          whiteSpace: 'nowrap'
+          whiteSpace: 'nowrap',
+          zIndex: 10000  // 网点名称标签最高优先级，确保在所有距离标签上方
         });
         marker.setLabel(label);
 
-        // 地图标记信息使用备注字段
+        // 通过DOM直接设置z-index，确保显示在最上层
+        setTimeout(() => {
+          try {
+            const labelElement = label.getContent();
+            if (labelElement && labelElement.style) {
+              labelElement.style.zIndex = '10000';
+              labelElement.style.position = 'relative';
+            }
+          } catch(e) {
+            // 忽略错误
+          }
+        }, 100);
+
         const infoHtml = `
           <div style="padding:10px;">
             <h4 style="margin:0 0 10px 0;color:#3366FF;">第 ${idx + 1} 站：${loc.name}</h4>
@@ -433,40 +619,26 @@
     }
 
     function drawRouteResult(result) {
-      const { route, polyline, legs, total_distance, total_duration } = result;
+      console.log('drawRouteResult 接收到的数据:', result);
+      const { route, polyline, legs, total_distance, total_duration, farthest_points } = result;
 
-      // 先绘制标记点
-      drawPoints(route);
-      
-      // 确保标记点绘制完成后再绘制路线
-      setTimeout(() => {
-        // 强制重绘所有 overlay，确保圆圈数字显示
-        overlays.forEach(overlay => {
-          if (overlay && overlay.draw) {
-            try {
-              overlay.draw();
-            } catch(e) {
-              console.warn('重绘 overlay 失败:', e);
-            }
-          }
-        });
-      }, 200);
+      clearMap();
+      if (!map || !route.length) return;
 
+      // 第一步：绘制路线和距离标记（先绘制底层元素）
       if (polyline && polyline.length) {
-        const pts = polyline.map(p => new BMap.Point(p[0], p[1]));
-        // 使用亮蓝色显示路线
-        const line = new BMap.Polyline(pts, { strokeWeight: 5, strokeOpacity: 0.9, strokeColor: "#2196F3" });
+        const routePts = polyline.map(p => new BMap.Point(p[0], p[1]));
+        const line = new BMap.Polyline(routePts, { strokeWeight: 5, strokeOpacity: 0.9, strokeColor: "#2196F3" });
         map.addOverlay(line);
         overlays.push(line);
-        
-        // 在路线旁标注距离
+
+        // 绘制距离标记（底层，z-index: 1000）
+        distanceLabels = [];  // 清空之前的距离标签引用
         if (legs && legs.length > 0) {
           legs.forEach((leg) => {
             if (leg.mid_point && leg.mid_point.length === 2) {
               const midPoint = new BMap.Point(leg.mid_point[0], leg.mid_point[1]);
-              const label = new BMap.Label(leg.distance_text, {
-                offset: new BMap.Size(10, -10)
-              });
+              const label = new BMap.Label(leg.distance_text, { offset: new BMap.Size(10, -10) });
               label.setStyle({
                 background: 'rgba(255, 152, 0, 0.95)',
                 color: 'white',
@@ -477,20 +649,126 @@
                 fontWeight: 'bold',
                 boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
                 whiteSpace: 'nowrap',
-                zIndex: 1000
+                zIndex: 1000  // 距离标记在底层（低于网点名称标签的10000）
               });
               label.setPosition(midPoint);
               map.addOverlay(label);
               overlays.push(label);
+              distanceLabels.push(label);  // 保存引用，用于控制显示/隐藏
             }
           });
         }
         
+        // 根据开关状态设置距离标签的显示
+        toggleDistanceLabels();
+
+        map.setViewport(routePts);
+      }
+
+      // 第二步：绘制标记点（后绘制，确保在上层）
+      const pts = [];
+      route.forEach((loc, idx) => {
+        const pt = new BMap.Point(loc.lng, loc.lat);
+        pts.push(pt);
+
+        const marker = createNumberMarker(pt, idx + 1, route.length);
+        map.addOverlay(marker);
+        markers.push(marker);
+
+        // 网点名称标签（确保在所有距离标签上方，包括黄色距离标签）
+        const labelText = loc.remark ? `${idx + 1}. ${loc.remark}` : `${idx + 1}. ${loc.name}`;
+        const offsetX = (idx % 2 === 0) ? 30 : -30;
+        const offsetY = (idx % 4 < 2) ? -15 : 10;
+        const label = new BMap.Label(labelText, { offset: new BMap.Size(offsetX, offsetY) });
+        label.setStyle({
+          background: 'white',
+          border: '2px solid #2196F3',
+          padding: '5px 10px',
+          borderRadius: '5px',
+          fontSize: '13px',
+          fontWeight: 'bold',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+          whiteSpace: 'nowrap',
+          zIndex: 10000  // 网点名称标签最高优先级，确保在所有距离标签上方
+        });
+        marker.setLabel(label);
+
+        // 通过DOM直接设置z-index，确保显示在最上层
+        setTimeout(() => {
+          try {
+            const labelElement = label.getContent();
+            if (labelElement && labelElement.style) {
+              labelElement.style.zIndex = '10000';
+              labelElement.style.position = 'relative';
+            }
+          } catch(e) {
+            // 忽略错误
+          }
+        }, 100);
+
+        const infoHtml = `
+          <div style="padding:10px;">
+            <h4 style="margin:0 0 10px 0;color:#3366FF;">第 ${idx + 1} 站：${loc.name}</h4>
+            ${loc.remark ? `<p style="margin:5px 0;font-size:14px;color:#FF9800;font-weight:bold;">${loc.remark}</p>` : '<p style="margin:5px 0;font-size:12px;color:#999;">无备注</p>'}
+            <p style="margin:5px 0;font-size:12px;color:#666;">经度: ${loc.lng}</p>
+            <p style="margin:5px 0;font-size:12px;color:#666;">纬度: ${loc.lat}</p>
+          </div>`;
+        marker.addEventListener('click', () => {
+          const win = new BMap.InfoWindow(infoHtml);
+          map.openInfoWindow(win, pt);
+        });
+      });
+
+      // 如果没有路线，只设置标记点的视图
+      if (!polyline || !polyline.length) {
         map.setViewport(pts);
       }
 
-      // 左侧面板 - 使用网点名称字段
-      let html = '<h3 style="color:#3366FF;margin-bottom:10px;">📋 路线详情</h3>';
+      // 强制刷新标记点标签，确保显示在最上层（在所有距离标签上方）
+      setTimeout(() => {
+        markers.forEach((marker, idx) => {
+          try {
+            const currentLabel = marker.getLabel();
+            if (currentLabel) {
+              // 重新设置标签样式，确保zIndex生效
+              const style = currentLabel.getStyle();
+              if (style) {
+                style.zIndex = 10000;  // 最高优先级
+                currentLabel.setStyle(style);
+              }
+              // 通过DOM直接设置z-index
+              try {
+                const labelElement = currentLabel.getContent();
+                if (labelElement && labelElement.style) {
+                  labelElement.style.zIndex = '10000';
+                  labelElement.style.position = 'relative';
+                }
+              } catch(e) {
+                // 忽略DOM操作错误
+              }
+            }
+          } catch(e) {
+            // 忽略错误
+          }
+        });
+      }, 200);
+
+      // ✅ 第三步：延迟绘制"最远直线"（确保在路线绘制完成后）
+      setTimeout(() => {
+        drawFarthestLine(farthest_points);
+      }, 100);
+
+      // 强制重绘自定义 overlay（圆圈数字）
+      setTimeout(() => {
+        overlays.forEach(overlay => {
+          if (overlay && overlay.draw) {
+            try { overlay.draw(); } catch(e) {}
+          }
+        });
+      }, 200);
+
+      // 左侧面板
+      let html = '<h3 style="color:#3366FF;margin-bottom:10px;">� 路线详情</h3>';
       (legs || []).forEach((lg, i) => {
         html += `
           <div class="route-item">
@@ -505,6 +783,20 @@
             总距离：${formatMeters(total_distance)} · 总用时：${formatSeconds(total_duration)}
           </div>
         </div>`;
+
+      if (farthest_points && farthest_points.point1 && farthest_points.point2) {
+        html += `
+          <div style="margin-top:15px;padding:10px;background:#E8F5E9;border-radius:5px;border-left:4px solid #00FF00;">
+            <div style="color:#2E7D32;font-weight:bold;margin-bottom:5px;">� 最远网点（直线距离）</div>
+            <div style="color:#388E3C;font-size:13px;">
+              <strong>${farthest_points.point1.name}</strong> ↔ <strong>${farthest_points.point2.name}</strong>
+            </div>
+            <div style="color:#00FF00;font-size:14px;font-weight:bold;margin-top:5px;">
+              ${farthest_points.straight_distance_text}
+            </div>
+          </div>`;
+      }
+
       document.getElementById('route-info').innerHTML = html;
     }
 
@@ -524,7 +816,7 @@
       const locations = currentLocations.length ? currentLocations : parseLocationData();
       if (locations.length < 2) return showError('至少需要2个网点！');
 
-      showLoading('📏 正在按序计算驾车路线...');
+      showLoading('� 正在按序计算驾车路线...');
       try {
         const resp = await fetch('/calculate', {
           method: 'POST',
@@ -544,7 +836,7 @@
       if (locations.length < 2) return showError('至少需要2个网点！');
 
       const startName = document.getElementById('startPoint').value.trim() || null;
-      showLoading('🔄 正在优化顺序并规划驾车路线...');
+      showLoading('� 正在优化顺序并规划驾车路线...');
 
       try {
         const resp = await fetch('/optimize', {
