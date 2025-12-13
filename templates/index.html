@@ -33,6 +33,8 @@
     .btn-success:hover { background: #388E3C; }
     .btn-clear { background: #9E9E9E; color: white; }
     .btn-clear:hover { background: #757575; }
+    .btn-screenshot { background: #FF9800; color: white; }
+    .btn-screenshot:hover { background: #F57C00; }
     #route-info { margin-top: 15px; padding: 15px; background: #f5f5f5; border-radius: 5px; font-size: 13px; }
     .route-item { padding: 8px; margin: 5px 0; background: white; border-left: 4px solid #3366FF; border-radius: 3px; }
     .distance-info { color: #FF5722; font-weight: bold; }
@@ -66,28 +68,35 @@
 
 <body>
   <div id="control-panel">
-    <h2>� 网点路线优化系统（百度地图）</h2>
+    <h2>📍 网点路线优化系统（百度地图）</h2>
 
     <div class="tabs">
-      <button class="tab active" onclick="switchTab('excel')">� Excel导入</button>
+      <button class="tab active" onclick="switchTab('excel')">📊 Excel导入</button>
       <button class="tab" onclick="switchTab('manual')">✏️ 手动输入</button>
     </div>
 
     <div id="excel-tab" class="tab-content active">
       <div class="excel-template">
-        <strong>� Excel格式要求：</strong><br>
-        列名：<code>经度</code> <code>纬度</code> <code>网点名称</code> <code>备注(可选)</code>
+        <strong>📋 Excel格式要求：</strong><br>
+        列名：<code>经度</code> <code>纬度</code> <code>网点名称</code> <code>备注(可选)</code> <code>网组(可选)</code><br>
+        <small style="color: #666;">支持批量导入：按"网组"列分组，每组依次标记点、连线、截图</small>
       </div>
 
       <div class="input-group">
         <label>选择Excel文件</label>
         <input type="file" id="excelFile" accept=".xlsx,.xls" onchange="handleExcelUpload()">
       </div>
+      
+      <div class="input-group" id="batchProcessSection" style="display: none;">
+        <button class="btn btn-success" onclick="startBatchProcess()" style="width: 100%;">
+          🔄 批量处理（按网组）
+        </button>
+      </div>
     </div>
 
     <div id="manual-tab" class="tab-content">
       <div class="input-group">
-        <label>网点数据（格式：经度,纬度,名称,备注可选）</label>
+        <label>网点数据（格式：经度,纬度,名称,备注可选,网组可选）</label>
         <textarea id="locationInput" rows="8"
           placeholder="116.397428,39.90923,北京营业部,备注A
 116.404,39.915,朝阳支行
@@ -106,9 +115,21 @@
     </div>
 
     <div>
-      <button class="btn btn-primary" onclick="optimizeRoute()">� 优化路线</button>
-      <button class="btn btn-success" onclick="calculateRoute()">� 按序计算</button>
-      <button class="btn btn-clear" onclick="clearMap()">�️ 清除</button>
+      <button class="btn btn-primary" onclick="optimizeRoute()">🔄 优化路线</button>
+      <button class="btn btn-success" onclick="calculateRoute()">📍 按序计算</button>
+      <button class="btn btn-clear" onclick="clearMap()">🗑️ 清除</button>
+    </div>
+
+    <!-- 手动截图按钮 -->
+    <div style="margin-top: 10px;">
+      <button class="btn btn-screenshot" onclick="manualCaptureScreenshot()" style="width: 100%;">
+        📸 手动截图
+      </button>
+    </div>
+
+    <!-- 状态显示区域（固定位置，显示计算路线、截图等状态） -->
+    <div id="status-info" style="margin-top: 10px; min-height: 40px; padding: 8px; background: #f5f5f5; border-radius: 5px; font-size: 12px; color: #666; text-align: center;">
+      <div id="status-text">就绪</div>
     </div>
 
     <!-- ✅ 最远线开关 -->
@@ -383,9 +404,83 @@
       map.enableScrollWheelZoom(true);
     }
 
+    // 统一的状态更新函数，确保状态栏始终显示
+    function updateStatus(message, type = 'info') {
+      const statusInfo = document.getElementById('status-info');
+      if (!statusInfo) return;
+      
+      // 确保状态栏始终显示
+      statusInfo.style.display = 'block';
+      
+      let statusText = document.getElementById('status-text');
+      // 如果找不到status-text元素，创建它
+      if (!statusText) {
+        statusInfo.innerHTML = '<div id="status-text">' + message + '</div>';
+        statusText = document.getElementById('status-text');
+      } else {
+        statusText.textContent = message;
+      }
+      
+      if (statusText) {
+        // 设置默认样式
+        statusInfo.style.background = '#f5f5f5'; // 默认背景色
+        statusText.style.color = '#666'; // 默认文字颜色
+        
+        if (type === 'loading') {
+          statusInfo.style.background = '#E3F2FD'; // 蓝色背景（加载中）
+          statusText.style.color = '#1976D2';
+        } else if (type === 'success') {
+          statusInfo.style.background = '#E8F5E9'; // 绿色背景（成功）
+          statusText.style.color = '#2E7D32';
+        } else if (type === 'error') {
+          statusInfo.style.background = '#FFEBEE'; // 红色背景（错误）
+          statusText.style.color = '#C62828';
+        } else if (type === 'ready') {
+          statusInfo.style.background = '#f5f5f5'; // 默认背景（就绪）
+          statusText.style.color = '#666';
+        }
+      }
+    }
+
     function showLoading(message) {
-      document.getElementById('route-info').innerHTML =
-        '<div class="loading">' + message + '</div>';
+      updateStatus(message, 'loading');
+    }
+    
+    function clearStatusInfo() {
+      // 不清除状态栏，只重置为"就绪"状态
+      updateStatus('就绪', 'ready');
+    }
+    
+    // 显示批量处理进度
+    function showBatchProgress(totalGroups) {
+      const statusInfo = document.getElementById('status-info');
+      if (statusInfo) {
+        statusInfo.style.display = 'block';
+        statusInfo.innerHTML = `
+          <div style="background: #f0f0f0; border-radius: 5px; padding: 10px; font-size: 12px;">
+            <div id="batchStatus">准备处理 ${totalGroups} 个网组...</div>
+            <div style="background: #ddd; border-radius: 3px; height: 20px; margin-top: 5px; overflow: hidden;">
+              <div id="batchProgressBar" style="background: #4CAF50; height: 100%; width: 0%; transition: width 0.3s;"></div>
+            </div>
+          </div>
+        `;
+      }
+    }
+    
+    // 更新批量处理状态
+    function updateBatchStatus(message, current, total) {
+      const statusInfo = document.getElementById('status-info');
+      if (statusInfo) {
+        const batchStatus = document.getElementById('batchStatus');
+        const batchProgressBar = document.getElementById('batchProgressBar');
+        if (batchStatus) {
+          batchStatus.textContent = message;
+        }
+        if (batchProgressBar) {
+          const progress = (current / total * 100).toFixed(0);
+          batchProgressBar.style.width = progress + '%';
+        }
+      }
     }
 
     function clearMap() {
@@ -426,12 +521,13 @@
         const lng = parseFloat(parts[0].trim());
         const lat = parseFloat(parts[1].trim());
         const name = parts[2].trim();
-        const remark = parts.slice(3).join(',').trim();
+        const remark = parts.length > 3 ? parts[3].trim() : '';  // 第四列：备注
+        const group = parts.length > 4 ? parts[4].trim() : '';  // 第五列：网组
         if (Number.isNaN(lng) || Number.isNaN(lat)) {
           errors.push(`第${idx + 1}行：经纬度格式错误`);
           return;
         }
-        locations.push({ lng, lat, name, remark });
+        locations.push({ lng, lat, name, remark, group });
       });
 
       if (errors.length) {
@@ -441,12 +537,15 @@
       return locations;
     }
 
+    // 保存分组数据
+    let excelGroups = {};
+
     async function handleExcelUpload() {
       const fileInput = document.getElementById('excelFile');
       const file = fileInput.files[0];
       if (!file) return;
 
-      showLoading('� 正在上传文件...');
+      showLoading('📤 正在上传文件...');
 
       const formData = new FormData();
       formData.append('file', file);
@@ -457,20 +556,157 @@
         if (data.error) return showError(data.error);
 
         currentLocations = data.locations || [];
-        document.getElementById('route-info').innerHTML =
-          `<div style="padding:10px;background:#4CAF50;color:white;border-radius:5px;">
-            ✅ 成功导入 ${currentLocations.length} 个网点
-          </div>`;
+        excelGroups = data.groups || {};
+        
+        let infoHtml = `<div style="padding:10px;background:#4CAF50;color:white;border-radius:5px;">
+          ✅ 成功导入 ${currentLocations.length} 个网点`;
+        
+        if (data.group_count > 0) {
+          infoHtml += `<br>📦 共 ${data.group_count} 个网组`;
+          // 显示分组信息
+          const groupList = Object.keys(excelGroups).map(g => `${g}(${excelGroups[g].length}个网点)`).join(', ');
+          infoHtml += `<br><small>${groupList}</small>`;
+          infoHtml += `<br><small>正在按网组依次处理...</small>`;
+        }
+        
+        infoHtml += `</div>`;
+        document.getElementById('route-info').innerHTML = infoHtml;
 
         if (currentLocations.length) {
           document.getElementById('locationInput').value =
-            currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || ""].filter(x => x !== "").join(',')).join('\n');
+            currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || "", l.group || ""].filter(x => x !== "").join(',')).join('\n');
         }
 
+        // 如果有分组数据，自动按网组依次处理
+        if (data.group_count > 0) {
+          // 自动开始批量处理
+          startBatchProcess();
+        } else {
+          // 没有分组，直接绘制所有点
         drawPoints(currentLocations);
+          document.getElementById('batchProcessSection').style.display = 'none';
+        }
       } catch (e) {
         showError('上传失败：' + e);
       }
+    }
+    
+    // 批量处理函数
+    async function startBatchProcess() {
+      if (!excelGroups || Object.keys(excelGroups).length === 0) {
+        showError('没有可处理的网组数据，请先导入Excel文件');
+        return;
+      }
+      
+      const groups = Object.keys(excelGroups);
+      const totalGroups = groups.length;
+      
+      // 显示进度条在状态区域
+      showBatchProgress(totalGroups);
+      
+      const results = [];
+      
+      for (let i = 0; i < groups.length; i++) {
+        const groupName = groups[i];
+        const locations = excelGroups[groupName];
+        
+        // 更新进度（在状态区域显示）
+        updateBatchStatus(`正在处理网组 ${i + 1}/${totalGroups}: ${groupName} (${locations.length}个网点)`, i + 1, totalGroups);
+        
+        try {
+          // 1. 清除地图
+          clearMap();
+          
+          // 2. 绘制当前组的网点
+          drawPoints(locations);
+          
+          // 3. 等待一下，确保地图渲染
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          // 4. 优化路线
+          updateBatchStatus(`🔄 正在优化网组 ${groupName} 的路线...`, i + 1, totalGroups);
+          const optimizeResp = await fetch('/optimize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ locations: locations })
+          });
+          const optimizeData = await optimizeResp.json();
+          
+          if (optimizeData.error) {
+            results.push({ group: groupName, success: false, error: optimizeData.error });
+            continue;
+          }
+          
+          // 5. 绘制路线结果（不自动截图，由批量处理控制）
+          drawRouteResult(optimizeData, false);
+          
+          // 6. 等待路线渲染
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // 7. 截图（使用网组名称）
+          updateBatchStatus(`📸 正在截图网组 ${groupName}...`, i + 1, totalGroups);
+          try {
+            await captureScreenshot(groupName);
+            // captureScreenshot内部已经处理了响应，这里假设成功
+            results.push({ 
+              group: groupName, 
+              success: true, 
+              location_count: locations.length
+            });
+          } catch (e) {
+            results.push({ 
+              group: groupName, 
+              success: false, 
+              error: '截图失败: ' + String(e)
+            });
+          }
+          
+          // 8. 等待一下再处理下一组
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+        } catch (e) {
+          results.push({ group: groupName, success: false, error: String(e) });
+        }
+      }
+      
+      // 显示完成结果（在状态区域）
+      const successCount = results.filter(r => r.success).length;
+      const failCount = results.filter(r => !r.success).length;
+      
+      let statusHtml = `<div style="background: #f0f0f0; border-radius: 5px; padding: 10px; font-size: 12px;">
+        <div style="color: #4CAF50; font-weight: bold; margin-bottom: 5px;">✅ 批量处理完成</div>
+        <div>成功: ${successCount} 组, 失败: ${failCount} 组</div>
+        <div style="background: #ddd; border-radius: 3px; height: 20px; margin-top: 5px; overflow: hidden;">
+          <div style="background: #4CAF50; height: 100%; width: 100%;"></div>
+        </div>`;
+      
+      if (failCount > 0) {
+        statusHtml += `<div style="margin-top: 8px; padding: 8px; background: #ff9800; color: white; border-radius: 3px; font-size: 11px;">
+          <strong>失败的网组:</strong><br>`;
+        results.filter(r => !r.success).forEach(r => {
+          statusHtml += `${r.group}: ${r.error}<br>`;
+        });
+        statusHtml += `</div>`;
+      }
+      
+      statusHtml += `</div>`;
+      const statusInfo = document.getElementById('status-info');
+      if (statusInfo) {
+        // 保持状态栏始终显示
+        statusInfo.style.display = 'block';
+        // 对于复杂的批量处理结果，直接更新innerHTML，但保持状态栏可见
+        statusInfo.innerHTML = statusHtml;
+        // 10秒后恢复为"就绪"状态
+        setTimeout(() => {
+          // 恢复状态栏的标准结构（包含status-text元素）
+          if (statusInfo) {
+            statusInfo.innerHTML = '<div id="status-text">就绪</div>';
+            updateStatus('就绪', 'ready');
+          }
+        }, 10000);
+      }
+      
+      // 路线详情页保持不变，不覆盖
     }
 
     function colorByIndex(i, total) {
@@ -517,7 +753,7 @@
         this._point = point;
         this._content = content;
       }
-
+      
       NumberMarkerOverlay.prototype = new BMap.Overlay();
       NumberMarkerOverlay.prototype.initialize = function(map) {
         this._map = map;
@@ -528,7 +764,7 @@
         }
         return this._content;
       };
-
+      
       NumberMarkerOverlay.prototype.draw = function() {
         if (this._content && this._map) {
           try {
@@ -544,12 +780,12 @@
           }
         }
       };
-
+      
       const overlay = new NumberMarkerOverlay(point, markerContent);
 
       map.addOverlay(overlay);
       overlays.push(overlay);
-
+      
       setTimeout(() => {
         if (overlay.draw) {
           overlay.draw();
@@ -618,7 +854,7 @@
       map.setViewport(pts);
     }
 
-    function drawRouteResult(result) {
+    function drawRouteResult(result, autoScreenshot = true) {
       console.log('drawRouteResult 接收到的数据:', result);
       const { route, polyline, legs, total_distance, total_duration, farthest_points } = result;
 
@@ -631,7 +867,7 @@
         const line = new BMap.Polyline(routePts, { strokeWeight: 5, strokeOpacity: 0.9, strokeColor: "#2196F3" });
         map.addOverlay(line);
         overlays.push(line);
-
+        
         // 绘制距离标记（底层，z-index: 1000）
         distanceLabels = [];  // 清空之前的距离标签引用
         if (legs && legs.length > 0) {
@@ -768,7 +1004,7 @@
       }, 200);
 
       // 左侧面板
-      let html = '<h3 style="color:#3366FF;margin-bottom:10px;">� 路线详情</h3>';
+      let html = '<h3 style="color:#3366FF;margin-bottom:10px;">🗺️ 路线详情</h3>';
       (legs || []).forEach((lg, i) => {
         html += `
           <div class="route-item">
@@ -787,7 +1023,7 @@
       if (farthest_points && farthest_points.point1 && farthest_points.point2) {
         html += `
           <div style="margin-top:15px;padding:10px;background:#E8F5E9;border-radius:5px;border-left:4px solid #00FF00;">
-            <div style="color:#2E7D32;font-weight:bold;margin-bottom:5px;">� 最远网点（直线距离）</div>
+            <div style="color:#2E7D32;font-weight:bold;margin-bottom:5px;">📏 最远网点（直线距离）</div>
             <div style="color:#388E3C;font-size:13px;">
               <strong>${farthest_points.point1.name}</strong> ↔ <strong>${farthest_points.point2.name}</strong>
             </div>
@@ -798,6 +1034,25 @@
       }
 
       document.getElementById('route-info').innerHTML = html;
+      
+      // 自动滚动控制面板到底部
+      setTimeout(() => {
+        const panel = document.getElementById('control-panel');
+        if (panel) {
+          panel.scrollTo({
+            top: panel.scrollHeight,
+            behavior: 'smooth'
+          });
+          
+          // 只有在 autoScreenshot 为 true 时才自动截图（批量处理时不会自动截图，避免重复）
+          if (autoScreenshot) {
+            // 滚动完成后，延迟执行截图（确保内容完全显示）
+            setTimeout(() => {
+              captureScreenshot();
+            }, 1500);  // 等待滚动动画完成后再截图
+          }
+        }
+      }, 100);
     }
 
     function formatMeters(m) {
@@ -812,11 +1067,37 @@
       return `${m}分钟`;
     }
 
+    // 按网组分组处理
+    function groupLocationsByGroup(locations) {
+      const groups = {};
+      for (const loc of locations) {
+        const group = (loc.group || '').trim();
+        const groupKey = group || '未分组';
+        if (!groups[groupKey]) {
+          groups[groupKey] = [];
+        }
+        groups[groupKey].push(loc);
+      }
+      return groups;
+    }
+
     async function calculateRoute() {
       const locations = currentLocations.length ? currentLocations : parseLocationData();
       if (locations.length < 2) return showError('至少需要2个网点！');
 
-      showLoading('� 正在按序计算驾车路线...');
+      // 按网组分组
+      const groups = groupLocationsByGroup(locations);
+      const groupKeys = Object.keys(groups);
+      
+      // 如果有多个网组，自动按组依次处理
+      if (groupKeys.length > 1 || (groupKeys.length === 1 && groupKeys[0] !== '未分组')) {
+        excelGroups = groups;
+        startBatchProcess();
+        return;
+      }
+
+      // 单个组或无分组，直接处理
+      showLoading('📍 正在按序计算驾车路线...');
       try {
         const resp = await fetch('/calculate', {
           method: 'POST',
@@ -835,8 +1116,20 @@
       const locations = currentLocations.length ? currentLocations : parseLocationData();
       if (locations.length < 2) return showError('至少需要2个网点！');
 
+      // 按网组分组
+      const groups = groupLocationsByGroup(locations);
+      const groupKeys = Object.keys(groups);
+      
+      // 如果有多个网组，自动按组依次处理
+      if (groupKeys.length > 1 || (groupKeys.length === 1 && groupKeys[0] !== '未分组')) {
+        excelGroups = groups;
+        startBatchProcess();
+        return;
+      }
+
+      // 单个组或无分组，直接处理
       const startName = document.getElementById('startPoint').value.trim() || null;
-      showLoading('� 正在优化顺序并规划驾车路线...');
+      showLoading('🔄 正在优化顺序并规划驾车路线...');
 
       try {
         const resp = await fetch('/optimize', {
@@ -849,6 +1142,98 @@
         drawRouteResult(data);
       } catch (e) {
         showError('优化失败：' + e);
+      }
+    }
+
+    // 手动截图功能（带滚动控制面板）
+    async function manualCaptureScreenshot() {
+      // 先滚动控制面板到底部，确保显示最新内容
+      const panel = document.getElementById('control-panel');
+      if (panel) {
+        panel.scrollTo({
+          top: panel.scrollHeight,
+          behavior: 'smooth'
+        });
+        // 等待滚动完成后再截图
+        setTimeout(() => {
+          captureScreenshot();
+        }, 800);
+      } else {
+        captureScreenshot();
+      }
+    }
+
+    // 截图功能
+    async function captureScreenshot(groupName = '') {
+      // 获取当前的UI状态（复选框状态）
+      const uiState = {
+        showFarthestLine: document.getElementById('toggleFarthest')?.checked ?? true,
+        showDistanceLabels: document.getElementById('toggleDistanceLabels')?.checked ?? true
+      };
+      
+      // 显示截图提示在状态区域（不影响路线详情页）
+      updateStatus(`📸 正在截图${groupName ? '网组 ' + groupName : ''}...`, 'loading');
+      
+      // 设置超时处理（30秒超时）
+      const timeoutId = setTimeout(() => {
+        updateStatus('❌ 截图超时（30秒），请检查Edge浏览器和网络连接', 'error');
+        setTimeout(() => {
+          updateStatus('就绪', 'ready');
+        }, 10000);
+      }, 30000);
+      
+      try {
+        const controller = new AbortController();
+        const timeoutSignal = setTimeout(() => controller.abort(), 30000);
+        
+        const resp = await fetch('/capture_screenshot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            ui_state: uiState,
+            group_name: groupName
+          }),
+          signal: controller.signal
+        });
+        
+        clearTimeout(timeoutSignal);
+        clearTimeout(timeoutId);
+        
+        const data = await resp.json();
+        
+        // 更新状态区域（不影响路线详情页）
+        if (data.error) {
+          updateStatus(`❌ 截图失败：${data.error}`, 'error');
+          // 10秒后恢复就绪状态
+          setTimeout(() => {
+            updateStatus('就绪', 'ready');
+          }, 10000);
+          return;
+        }
+        
+        // 显示成功消息
+        updateStatus(`✅ 截图已保存: ${data.filename}`, 'success');
+        
+        // 10秒后恢复就绪状态
+        setTimeout(() => {
+          updateStatus('就绪', 'ready');
+        }, 10000);
+        
+        console.log('截图保存成功:', data.filepath);
+      } catch (e) {
+        clearTimeout(timeoutId);
+        
+        // 更新状态区域显示错误（不影响路线详情页）
+        if (e.name === 'AbortError') {
+          updateStatus('❌ 截图请求超时，请检查Edge浏览器和网络连接', 'error');
+        } else {
+          updateStatus(`❌ 截图失败：${e.message || String(e)}`, 'error');
+        }
+        // 10秒后恢复就绪状态
+        setTimeout(() => {
+          updateStatus('就绪', 'ready');
+        }, 10000);
+        console.error('截图请求失败:', e);
       }
     }
   </script>

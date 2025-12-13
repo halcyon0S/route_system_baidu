@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import math
-import webbrowser
 import threading
 import time
 from typing import List, Dict, Any, Tuple, Optional
@@ -17,11 +16,26 @@ import pandas as pd
 import requests
 from flask import Flask, request, jsonify, render_template
 
+# Selenium 相关导入（用于打开浏览器）
+try:
+    from selenium import webdriver
+    from selenium.webdriver.edge.service import Service
+    from selenium.webdriver.edge.options import Options
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+    print("⚠️ 警告：未安装 selenium，将无法自动打开浏览器")
+    print("   建议安装：pip install selenium")
+
 # ==================== 配置常量 ====================
 # 服务器配置
 HOST = "127.0.0.1"
 PORT = 5005
 DEBUG_MODE = True
+
+# 全局浏览器实例（用于截图功能复用）
+_global_browser_driver = None
+_browser_lock = threading.Lock()
 
 # 百度地图API配置
 BAIDU_WEB_AK = os.getenv("BAIDU_WEB_AK", "PnhCYT0obcdXPMchgzYz8QE4Y5ezbq36")
@@ -47,6 +61,13 @@ def _safe_float(x) -> float:
 
 
 def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
+    """
+    读取Excel文件，解析网点数据
+    支持列：经度、纬度、网点名称、备注(可选)、网组(可选)
+    
+    Returns:
+        网点列表，每个网点包含：lng, lat, name, remark, group
+    """
     df = pd.read_excel(file_stream)
 
     # 兼容列名（严格按中文列名最稳）
@@ -55,10 +76,12 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
     cols = set(df.columns.astype(str))
     missing = needed - cols
     if missing:
-        raise ValueError(f"Excel缺少列：{', '.join(missing)}。需要：经度、纬度、网点名称；备注可选。")
+        raise ValueError(f"Excel缺少列：{', '.join(missing)}。需要：经度、纬度、网点名称；备注、网组可选。")
 
     if "备注" not in df.columns:
         df["备注"] = ""
+    if "网组" not in df.columns:
+        df["网组"] = ""
 
     locations = []
     for _, r in df.iterrows():
@@ -66,11 +89,12 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
         lat = _safe_float(r["纬度"])
         name = "" if pd.isna(r["网点名称"]) else str(r["网点名称"]).strip()
         remark = "" if pd.isna(r["备注"]) else str(r["备注"]).strip()
+        group = "" if pd.isna(r["网组"]) else str(r["网组"]).strip()
         if not name:
             continue
         if math.isnan(lng) or math.isnan(lat):
             continue
-        locations.append({"lng": lng, "lat": lat, "name": name, "remark": remark})
+        locations.append({"lng": lng, "lat": lat, "name": name, "remark": remark, "group": group})
     return locations
 
 
@@ -277,7 +301,7 @@ def _build_route_result(route: List[Dict[str, Any]]) -> Dict[str, Any]:
             "straight_distance": int(straight_dist),
             "straight_distance_text": _format_distance_m(int(straight_dist)),
         }
-    
+
     return {
         "route": route,
         "polyline": polyline_all,
@@ -315,7 +339,22 @@ def upload_excel():
         if not locs:
             return jsonify({"error": "未解析到有效网点数据（请检查经纬度、名称列）"}), 400
 
-        return jsonify({"locations": locs, "count": len(locs)})
+        # 按网组分组
+        groups = {}
+        for loc in locs:
+            group = loc.get("group", "").strip()
+            if not group:
+                group = "未分组"  # 如果没有网组，归为"未分组"
+            if group not in groups:
+                groups[group] = []
+            groups[group].append(loc)
+        
+        return jsonify({
+            "locations": locs,
+            "count": len(locs),
+            "groups": groups,
+            "group_count": len(groups)
+        })
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
@@ -433,6 +472,66 @@ def optimize():
         return jsonify({"error": f"优化失败: {str(e)}"}), 500
 
 
+@app.post("/capture_screenshot")
+def capture_screenshot_endpoint():
+    """
+    截图API端点：使用Selenium + Edge浏览器截取当前浏览器页面viewport
+    支持同步当前浏览器中的UI状态（如复选框状态）
+    
+    Returns:
+        JSON响应，包含截图文件路径或error信息
+    """
+    try:
+        from jietu import capture_screenshot_sync
+        
+        # 获取请求中的UI状态
+        data = request.get_json() or {}
+        ui_state = data.get('ui_state', {})
+        
+        # 获取当前应用URL
+        url = f"http://{HOST}:{PORT}"
+        
+        # 截图保存目录
+        save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "网点图")
+        
+        # 传递全局浏览器实例给截图模块（优先使用已打开的浏览器）
+        global _global_browser_driver
+        driver_instance = _global_browser_driver
+        
+        if driver_instance is None:
+            print("[截图API] ⚠️ 警告：未检测到已打开的浏览器实例")
+            print("[截图API]   截图功能将启动新的浏览器实例（可能不是用户当前查看的页面）")
+        else:
+            print("[截图API] ✓ 使用已打开的浏览器实例进行截图")
+        
+        # 获取网组名称（用于截图文件命名）
+        group_name = data.get('group_name', '')
+        
+        # 执行截图（传递UI状态、浏览器实例和网组名称，等待3秒，确保页面和控制面板滚动完成）
+        filepath = capture_screenshot_sync(
+            url, 
+            save_dir=save_dir, 
+            wait_time=3, 
+            ui_state=ui_state,
+            driver_instance=driver_instance,
+            group_name=group_name
+        )
+        
+        # 返回相对路径
+        rel_path = os.path.relpath(filepath, os.path.dirname(os.path.abspath(__file__)))
+        
+        return jsonify({
+            "success": True,
+            "filepath": rel_path,
+            "filename": os.path.basename(filepath),
+            "message": "截图保存成功"
+        })
+    except ImportError as e:
+        return jsonify({"error": f"截图模块导入失败: {str(e)}，请确保已安装selenium: pip install selenium。同时需要安装Edge浏览器和EdgeDriver"}), 500
+    except Exception as e:
+        return jsonify({"error": f"截图失败: {str(e)}"}), 500
+
+
 if __name__ == "__main__":
     """
     主程序入口
@@ -440,17 +539,64 @@ if __name__ == "__main__":
     """
     import os
     
-    # 自动打开浏览器的函数
+    # 使用 Selenium 打开浏览器的函数
     def open_browser():
-        """延迟打开浏览器，确保服务器已启动"""
+        """延迟打开浏览器，确保服务器已启动，使用 Selenium 打开浏览器供截图功能复用"""
+        global _global_browser_driver
+        
         time.sleep(1.5)  # 等待服务器启动
         url = f"http://{HOST}:{PORT}"
-        try:
-            webbrowser.open(url)
-            print(f"✓ 已自动打开浏览器: {url}")
-        except Exception as e:
-            print(f"⚠ 自动打开浏览器失败: {e}")
+        
+        if not SELENIUM_AVAILABLE:
+            print(f"⚠ Selenium 未安装，无法自动打开浏览器")
             print(f"   请手动访问: {url}")
+            return
+        
+        try:
+            with _browser_lock:
+                if _global_browser_driver is not None:
+                    print(f"✓ 浏览器已打开，正在访问: {url}")
+                    try:
+                        _global_browser_driver.get(url)
+                    except Exception as e:
+                        print(f"⚠ 访问页面失败: {e}")
+                    return
+                
+                print(f"[浏览器] 正在使用 Selenium 启动 Edge 浏览器...")
+                
+                # 配置 Edge 浏览器选项（隐藏自动化标识）
+                edge_options = Options()
+                edge_options.add_argument('--window-size=1920,1080')
+                edge_options.add_argument('--disable-blink-features=AutomationControlled')
+                edge_options.add_experimental_option('excludeSwitches', ['enable-automation'])
+                edge_options.add_experimental_option('useAutomationExtension', False)
+                edge_options.page_load_strategy = 'normal'
+                
+                # 启动浏览器
+                service = Service()
+                driver = webdriver.Edge(service=service, options=edge_options)
+                driver.set_page_load_timeout(20)
+                driver.implicitly_wait(5)
+                
+                # 访问页面
+                print(f"[浏览器] 正在访问: {url}")
+                driver.get(url)
+                
+                # 保存到全局变量
+                _global_browser_driver = driver
+                
+                print(f"✓ 已使用 Selenium 打开 Edge 浏览器: {url}")
+                print(f"   浏览器实例已保存，截图功能将复用此实例")
+                
+        except Exception as e:
+            print(f"⚠ 使用 Selenium 打开浏览器失败: {e}")
+            print(f"   请手动访问: {url}")
+            if _global_browser_driver:
+                try:
+                    _global_browser_driver.quit()
+                except:
+                    pass
+                _global_browser_driver = None
     
     # 打印启动信息
     print("=" * 60)
