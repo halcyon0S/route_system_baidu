@@ -48,6 +48,8 @@ _browser_lock = threading.Lock()
 # 百度地图API配置
 BAIDU_WEB_AK = os.getenv("BAIDU_WEB_AK", "PnhCYT0obcdXPMchgzYz8QE4Y5ezbq36")
 DIRECTIONLITE_URL = "https://api.map.baidu.com/directionlite/v1/driving"
+# 行政区划查询API（使用Geocoding API的逆地理编码功能）
+GEOCODING_URL = "https://api.map.baidu.com/geocoding/v3/"
 
 # API请求超时时间（秒）
 API_TIMEOUT = 20
@@ -342,10 +344,10 @@ def _safe_float(x) -> float:
 def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
     """
     读取Excel文件，解析网点数据
-    支持列：经度、纬度、网点名称、备注(可选)、网组(可选)
+    支持列：经度、纬度、网点名称、备注(可选)、网组(可选)、工号(可选)、姓名(可选)
     
     Returns:
-        网点列表，每个网点包含：lng, lat, name, remark, group
+        网点列表，每个网点包含：lng, lat, name, remark, group, employee_id, employee_name
     """
     df = pd.read_excel(file_stream)
 
@@ -355,12 +357,16 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
     cols = set(df.columns.astype(str))
     missing = needed - cols
     if missing:
-        raise ValueError(f"Excel缺少列：{', '.join(missing)}。需要：经度、纬度、网点名称；备注、网组可选。")
+        raise ValueError(f"Excel缺少列：{', '.join(missing)}。需要：经度、纬度、网点名称；备注、网组、工号、姓名可选。")
 
     if "备注" not in df.columns:
         df["备注"] = ""
     if "网组" not in df.columns:
         df["网组"] = ""
+    if "工号" not in df.columns:
+        df["工号"] = ""
+    if "姓名" not in df.columns:
+        df["姓名"] = ""
 
     locations = []
     for _, r in df.iterrows():
@@ -369,11 +375,21 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
         name = "" if pd.isna(r["网点名称"]) else str(r["网点名称"]).strip()
         remark = "" if pd.isna(r["备注"]) else str(r["备注"]).strip()
         group = "" if pd.isna(r["网组"]) else str(r["网组"]).strip()
+        employee_id = "" if pd.isna(r["工号"]) else str(r["工号"]).strip()
+        employee_name = "" if pd.isna(r["姓名"]) else str(r["姓名"]).strip()
         if not name:
             continue
         if math.isnan(lng) or math.isnan(lat):
             continue
-        locations.append({"lng": lng, "lat": lat, "name": name, "remark": remark, "group": group})
+        locations.append({
+            "lng": lng, 
+            "lat": lat, 
+            "name": name, 
+            "remark": remark, 
+            "group": group,
+            "employee_id": employee_id,
+            "employee_name": employee_name
+        })
     return locations
 
 
@@ -714,11 +730,31 @@ def upload_excel():
                 groups[group] = []
             groups[group].append(loc)
         
+        # 按工号分组（用于行政区图功能）
+        employees = {}
+        for loc in locs:
+            employee_id = loc.get("employee_id", "").strip()
+            if employee_id:  # 只有有工号的才分组
+                if employee_id not in employees:
+                    employees[employee_id] = {
+                        "employee_id": employee_id,
+                        "employee_name": loc.get("employee_name", "").strip(),
+                        "groups": {}
+                    }
+                group = loc.get("group", "").strip()
+                if not group:
+                    group = "未分组"
+                if group not in employees[employee_id]["groups"]:
+                    employees[employee_id]["groups"][group] = []
+                employees[employee_id]["groups"][group].append(loc)
+        
         return jsonify({
             "locations": locs,
             "count": len(locs),
             "groups": groups,
-            "group_count": len(groups)
+            "group_count": len(groups),
+            "employees": employees,
+            "employee_count": len(employees)
         })
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -853,12 +889,25 @@ def capture_screenshot_endpoint():
         data = request.get_json() or {}
         ui_state = data.get('ui_state', {})
         
+        # 获取网组名称、工号、姓名（用于截图文件命名和路径）
+        group_name = data.get('group_name', '')
+        employee_id = data.get('employee_id', '')
+        employee_name = data.get('employee_name', '')
+        
         # 获取当前应用URL
         url = f"http://{HOST}:{_get_actual_port()}"
         
-        # 截图保存目录（打包后保存到exe所在目录的"网点图"文件夹）
+        # 截图保存目录（打包后保存到exe所在目录的"网组网点路线图"文件夹）
         base_dir = _get_base_dir()
-        save_dir = os.path.join(base_dir, "网点图")
+        base_save_dir = os.path.join(base_dir, "网组网点路线图")
+        
+        # 如果有工号和姓名，创建子文件夹
+        if employee_id and employee_id.strip() and employee_name and employee_name.strip():
+            safe_employee_id = "".join(c for c in employee_id.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+            safe_employee_name = "".join(c for c in employee_name.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+            save_dir = os.path.join(base_save_dir, f"{safe_employee_id}-{safe_employee_name}")
+        else:
+            save_dir = base_save_dir
         
         # 检查浏览器实例
         # 如果浏览器实例不存在，尝试创建（正常启动场景）
@@ -909,9 +958,6 @@ def capture_screenshot_endpoint():
         
         print("[截图API] ✓ 使用浏览器实例进行截图")
         
-        # 获取网组名称（用于截图文件命名）
-        group_name = data.get('group_name', '')
-        
         # 执行截图（传递UI状态、浏览器实例和网组名称，等待3秒，确保页面和控制面板滚动完成）
         # 如果截图失败，会尝试多次重试（最多3次）
         max_retries = 3
@@ -927,7 +973,9 @@ def capture_screenshot_endpoint():
                     wait_time=3, 
                     ui_state=ui_state,
                     driver_instance=driver_instance,
-                    group_name=group_name
+                    group_name=group_name,
+                    employee_id=employee_id,
+                    employee_name=employee_name
                 )
                 # 截图成功，跳出重试循环
                 if retry_count > 0:
@@ -966,6 +1014,107 @@ def capture_screenshot_endpoint():
         return jsonify({"error": f"截图模块导入失败: {str(e)}，请确保已安装selenium: pip install selenium。同时需要安装Edge浏览器和EdgeDriver"}), 500
     except Exception as e:
         return jsonify({"error": f"截图失败: {str(e)}"}), 500
+
+
+@app.post("/get_district_boundary")
+def get_district_boundary():
+    """
+    获取行政区划边界
+    使用百度地图逆地理编码API获取坐标点所在的行政区，然后返回行政区名称
+    
+    Args:
+        JSON请求体包含：locations (坐标点列表)
+    
+    Returns:
+        JSON响应，包含每个坐标点对应的行政区信息
+    """
+    try:
+        payload = request.get_json(force=True)
+        if not payload:
+            return jsonify({"error": "请求体为空"}), 400
+        
+        locations = payload.get("locations", [])
+        if not isinstance(locations, list):
+            return jsonify({"error": "locations必须是数组"}), 400
+        
+        _require_ak()
+        
+        district_info = []
+        
+        for loc in locations:
+            lng = loc.get("lng")
+            lat = loc.get("lat")
+            
+            if lng is None or lat is None:
+                continue
+            
+            # 调用逆地理编码API获取行政区信息
+            params = {
+                "ak": BAIDU_WEB_AK,
+                "location": f"{lat},{lng}",  # 注意：百度API参数为 lat,lng
+                "output": "json",
+                "coordtype": "bd09ll",
+                "extensions_poi": 0,
+                "extensions_road": 0,
+                "extensions_town": 1,  # 返回乡镇信息
+            }
+            
+            try:
+                resp = requests.get(GEOCODING_URL, params=params, timeout=API_TIMEOUT)
+                resp.raise_for_status()
+                data = resp.json()
+                
+                if data.get("status") == 0 and "result" in data:
+                    address_component = data["result"].get("addressComponent", {})
+                    # 提取行政区信息：省+市+区县
+                    province = address_component.get("province", "")
+                    city = address_component.get("city", "")
+                    district = address_component.get("district", "")
+                    
+                    # 组合成完整行政区名称（如：江苏南京市建邺区）
+                    if province and city and district:
+                        district_name = f"{province}{city}{district}"
+                    elif province and district:
+                        district_name = f"{province}{district}"
+                    elif district:
+                        district_name = district
+                    else:
+                        district_name = "未知区域"
+                    
+                    district_info.append({
+                        "lng": lng,
+                        "lat": lat,
+                        "district": district_name,
+                        "province": province,
+                        "city": city,
+                        "district_level": district
+                    })
+                else:
+                    district_info.append({
+                        "lng": lng,
+                        "lat": lat,
+                        "district": "未知区域",
+                        "province": "",
+                        "city": "",
+                        "district_level": ""
+                    })
+            except Exception as e:
+                print(f"[行政区查询] 查询失败 ({lng}, {lat}): {e}")
+                district_info.append({
+                    "lng": lng,
+                    "lat": lat,
+                    "district": "查询失败",
+                    "province": "",
+                    "city": "",
+                    "district_level": ""
+                })
+        
+        return jsonify({
+            "success": True,
+            "districts": district_info
+        })
+    except Exception as e:
+        return jsonify({"error": f"获取行政区信息失败: {str(e)}"}), 500
 
 
 if __name__ == "__main__":

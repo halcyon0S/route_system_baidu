@@ -18,7 +18,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
 
-def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "") -> str:
+def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "", employee_id: str = "", employee_name: str = "") -> str:
     """
     使用Selenium + Edge浏览器截图页面viewport（可视区域）
     确保截取到控制面板滚动后的最新状态，并同步当前浏览器中的UI状态
@@ -30,6 +30,8 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
         ui_state: UI状态字典，包含 showFarthestLine 和 showDistanceLabels 等状态
         driver_instance: 浏览器实例（可选）
         group_name: 网组名称，用于截图文件命名（可选）
+        employee_id: 工号，用于截图文件命名（可选）
+        employee_name: 姓名，用于截图文件命名（可选）
     
     Returns:
         保存的文件路径
@@ -39,18 +41,36 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
     """
     if ui_state is None:
         ui_state = {}
-    # 创建保存目录
+    # 创建保存目录（如果save_dir已经包含子目录路径，这里会创建完整路径）
     os.makedirs(save_dir, exist_ok=True)
     
-    # 生成文件名（优先使用网组名称，否则使用时间戳）
+    # 生成文件名（按规则：工号-姓名-网组网点图-网组 或 工号-姓名-行政区图）
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    if group_name and group_name.strip():
-        # 清理网组名称，移除非法文件名字符
-        safe_group_name = "".join(c for c in group_name.strip() if c.isalnum() or c in ('-', '_', ' ')).strip()
-        safe_group_name = safe_group_name.replace(' ', '_')
-        filename = f"{safe_group_name}_{timestamp}.png"
+    
+    # 判断是否为行政区图（group_name为空或特殊标记）
+    is_district_map = not group_name or group_name == "__DISTRICT_MAP__"
+    
+    if is_district_map:
+        # 行政区图命名：工号-姓名-行政区图
+        if employee_id and employee_id.strip() and employee_name and employee_name.strip():
+            safe_employee_id = "".join(c for c in employee_id.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+            safe_employee_name = "".join(c for c in employee_name.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+            filename = f"{safe_employee_id}-{safe_employee_name}-行政区图_{timestamp}.png"
+        else:
+            filename = f"行政区图_{timestamp}.png"
     else:
-        filename = f"route_screenshot_{timestamp}.png"
+        # 网组网点图命名：工号-姓名-网组网点图-网组
+        if employee_id and employee_id.strip() and employee_name and employee_name.strip():
+            safe_employee_id = "".join(c for c in employee_id.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+            safe_employee_name = "".join(c for c in employee_name.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+            safe_group_name = "".join(c for c in group_name.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+            filename = f"{safe_employee_id}-{safe_employee_name}-网组网点图-{safe_group_name}_{timestamp}.png"
+        elif group_name and group_name.strip():
+            # 没有工号，使用原来的命名方式
+            safe_group_name = "".join(c for c in group_name.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+            filename = f"{safe_group_name}_{timestamp}.png"
+        else:
+            filename = f"route_screenshot_{timestamp}.png"
     filepath = os.path.join(save_dir, filename)
     
     driver = None
@@ -284,7 +304,7 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
             print("[截图] 使用外部浏览器实例，不关闭浏览器")
 
 
-def capture_screenshot_sync(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "") -> str:
+def capture_screenshot_sync(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "", employee_id: str = "", employee_name: str = "") -> str:
     """
     同步版本的截图函数（供Flask调用）
     注意：此函数已经是同步的，保留此函数以保持API兼容性
@@ -296,11 +316,13 @@ def capture_screenshot_sync(url: str, save_dir: str = "网点图", wait_time: in
         ui_state: UI状态字典，包含 showFarthestLine 和 showDistanceLabels 等状态
         driver_instance: 浏览器实例（可选）
         group_name: 网组名称，用于截图文件命名（可选）
+        employee_id: 工号，用于截图文件命名（可选）
+        employee_name: 姓名，用于截图文件命名（可选）
     
     Returns:
         保存的文件路径
     """
-    return capture_screenshot(url, save_dir, wait_time, ui_state, driver_instance, group_name)
+    return capture_screenshot(url, save_dir, wait_time, ui_state, driver_instance, group_name, employee_id, employee_name)
 
 
 if __name__ == "__main__":

@@ -147,8 +147,8 @@
     <div id="excel-tab" class="tab-content active">
       <div class="excel-template">
         <strong>📋 Excel格式要求：</strong><br>
-        列名：<code>经度</code> <code>纬度</code> <code>网点名称</code> <code>备注(可选)</code> <code>网组(可选)</code><br>
-        <small style="color: #666;">支持批量导入：按"网组"列分组，每组依次标记点、连线、截图</small>
+        列名：<code>经度</code> <code>纬度</code> <code>网点名称</code> <code>备注(可选)</code> <code>网组(可选)</code> <code>工号(可选)</code> <code>姓名(可选)</code><br>
+        <small style="color: #666;">支持批量导入：按"网组"列分组，每组依次标记点、连线、截图；如有工号，则按工号分组处理</small>
       </div>
 
       <div class="input-group">
@@ -165,7 +165,7 @@
 
     <div id="manual-tab" class="tab-content">
       <div class="input-group">
-        <label>网点数据（格式：经度,纬度,名称,备注可选,网组可选）</label>
+        <label>网点数据（格式：经度,纬度,名称,备注可选,网组可选,工号可选,姓名可选）</label>
         <textarea id="locationInput" rows="8"
           placeholder="116.397428,39.90923,北京营业部,备注A
 116.404,39.915,朝阳支行
@@ -222,6 +222,14 @@
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#555;font-weight:normal;">
         <input type="checkbox" id="toggleRouteSimple" onchange="toggleRouteSimple()">
         路线简版
+      </label>
+    </div>
+
+    <!-- ✅ 行政区图开关 -->
+    <div style="margin-top:8px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#555;font-weight:normal;">
+        <input type="checkbox" id="toggleDistrictMap" checked onchange="toggleDistrictMap()">
+        行政区图
       </label>
     </div>
 
@@ -358,6 +366,8 @@
     let routeSimpleMode = false;
     // 保存当前路线结果
     let currentRouteResult = null;
+    // 行政区图开关状态
+    let districtMapEnabled = true;
 
     function toggleRouteSimple() {
       routeSimpleMode = document.getElementById('toggleRouteSimple')?.checked ?? false;
@@ -367,6 +377,12 @@
       if (currentRouteResult) {
         updateRouteInfo(currentRouteResult, routeSimpleMode);
       }
+    }
+
+    // 行政区图开关
+    function toggleDistrictMap() {
+      districtMapEnabled = document.getElementById('toggleDistrictMap')?.checked ?? true;
+      console.log('切换行政区图状态:', districtMapEnabled);
     }
 
     // 更新路线详情显示
@@ -748,11 +764,13 @@
         const name = parts[2].trim();
         const remark = parts.length > 3 ? parts[3].trim() : '';  // 第四列：备注
         const group = parts.length > 4 ? parts[4].trim() : '';  // 第五列：网组
+        const employee_id = parts.length > 5 ? parts[5].trim() : '';  // 第六列：工号
+        const employee_name = parts.length > 6 ? parts[6].trim() : '';  // 第七列：姓名
         if (Number.isNaN(lng) || Number.isNaN(lat)) {
           errors.push(`第${idx + 1}行：经纬度格式错误`);
           return;
         }
-        locations.push({ lng, lat, name, remark, group });
+        locations.push({ lng, lat, name, remark, group, employee_id, employee_name });
       });
 
       if (errors.length) {
@@ -764,6 +782,7 @@
 
     // 保存分组数据
     let excelGroups = {};
+    let excelEmployees = {};  // 按工号分组的数据
 
     async function handleExcelUpload() {
       const fileInput = document.getElementById('excelFile');
@@ -782,6 +801,7 @@
 
         currentLocations = data.locations || [];
         excelGroups = data.groups || {};
+        excelEmployees = data.employees || {};  // 保存按工号分组的数据
         
         // 美化成功导入的弹窗格式
         let infoHtml = `<div style="
@@ -824,7 +844,7 @@
 
         if (currentLocations.length) {
           document.getElementById('locationInput').value =
-            currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || "", l.group || ""].filter(x => x !== "").join(',')).join('\n');
+            currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || "", l.group || "", l.employee_id || "", l.employee_name || ""].filter(x => x !== "").join(',')).join('\n');
         }
 
         // 如果有分组数据，显示自定义对话框选择截图模式
@@ -843,7 +863,12 @@
             
             // 延迟一下再开始批量处理，确保UI状态已更新
             setTimeout(() => {
-              startBatchProcess();
+              // 如果有工号数据，按工号分组处理；否则按网组处理
+              if (data.employee_count > 0) {
+                startBatchProcessByEmployee();
+              } else {
+                startBatchProcess();
+              }
             }, 300);
           });
         } else {
@@ -908,10 +933,10 @@
           // 6. 等待路线渲染
           await new Promise(resolve => setTimeout(resolve, 1000));
           
-          // 7. 截图（使用网组名称）
+          // 7. 截图（使用网组名称，如果没有工号则传空字符串）
           updateBatchStatus(`📸 正在截图网组 ${groupName}...`, i + 1, totalGroups);
           try {
-            await captureScreenshot(groupName);
+            await captureScreenshot(groupName, '', '');
             // captureScreenshot内部已经处理了响应，这里假设成功
             results.push({ 
               group: groupName, 
@@ -972,6 +997,358 @@
       }
       
       // 路线详情页保持不变，不覆盖
+    }
+
+    // 按工号分组的批量处理函数
+    async function startBatchProcessByEmployee() {
+      if (!excelEmployees || Object.keys(excelEmployees).length === 0) {
+        showError('没有可处理的工号数据，请先导入包含工号的Excel文件');
+        return;
+      }
+      
+      const employeeIds = Object.keys(excelEmployees);
+      const totalEmployees = employeeIds.length;
+      
+      // 显示进度条
+      showBatchProgress(totalEmployees);
+      
+      const allResults = [];
+      
+      // 遍历每个工号
+      for (let empIdx = 0; empIdx < employeeIds.length; empIdx++) {
+        const employeeId = employeeIds[empIdx];
+        const employeeData = excelEmployees[employeeId];
+        const employeeName = employeeData.employee_name || '';
+        const groups = Object.keys(employeeData.groups);
+        const totalGroups = groups.length;
+        
+        updateBatchStatus(`正在处理工号 ${empIdx + 1}/${totalEmployees}: ${employeeId} (${employeeName}) - ${totalGroups}个网组`, empIdx + 1, totalEmployees);
+        
+        const employeeResults = [];
+        
+        // 处理该工号下的所有网组
+        for (let i = 0; i < groups.length; i++) {
+          const groupName = groups[i];
+          const locations = employeeData.groups[groupName];
+          
+          updateBatchStatus(`工号 ${employeeId}: 正在处理网组 ${i + 1}/${totalGroups}: ${groupName} (${locations.length}个网点)`, empIdx + 1, totalEmployees);
+          
+          try {
+            // 1. 清除地图
+            clearMap();
+            
+            // 2. 绘制当前组的网点
+            drawPoints(locations);
+            
+            // 3. 等待一下，确保地图渲染
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // 4. 优化路线
+            updateBatchStatus(`工号 ${employeeId}: 🔄 正在优化网组 ${groupName} 的路线...`, empIdx + 1, totalEmployees);
+            const optimizeResp = await fetch('/optimize', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ locations: locations })
+            });
+            const optimizeData = await optimizeResp.json();
+            
+            if (optimizeData.error) {
+              employeeResults.push({ group: groupName, success: false, error: optimizeData.error });
+              continue;
+            }
+            
+            // 5. 绘制路线结果
+            drawRouteResult(optimizeData, false);
+            
+            // 6. 等待路线渲染
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // 7. 截图（使用新的命名规则：工号-姓名-网组网点图-网组）
+            updateBatchStatus(`工号 ${employeeId}: 📸 正在截图网组 ${groupName}...`, empIdx + 1, totalEmployees);
+            try {
+              await captureScreenshot(groupName, employeeId, employeeName);
+              employeeResults.push({ 
+                group: groupName, 
+                success: true, 
+                location_count: locations.length
+              });
+            } catch (e) {
+              employeeResults.push({ 
+                group: groupName, 
+                success: false, 
+                error: '截图失败: ' + String(e)
+              });
+            }
+            
+            // 8. 等待一下再处理下一组
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+          } catch (e) {
+            employeeResults.push({ group: groupName, success: false, error: String(e) });
+          }
+        }
+        
+        // 如果行政区图功能开启，且该工号有网组，绘制行政区图
+        if (districtMapEnabled && totalGroups > 0) {
+          updateBatchStatus(`工号 ${employeeId}: 🗺️ 正在绘制行政区图...`, empIdx + 1, totalEmployees);
+          try {
+            await drawDistrictMapForEmployee(employeeId, employeeName, employeeData.groups);
+            employeeResults.push({ 
+              type: 'district_map',
+              success: true
+            });
+          } catch (e) {
+            console.error('绘制行政区图失败:', e);
+            employeeResults.push({ 
+              type: 'district_map',
+              success: false,
+              error: String(e)
+            });
+          }
+        }
+        
+        allResults.push({
+          employee_id: employeeId,
+          employee_name: employeeName,
+          groups: employeeResults
+        });
+      }
+      
+      // 显示完成结果
+      const totalSuccess = allResults.reduce((sum, emp) => 
+        sum + emp.groups.filter(r => r.success).length, 0);
+      const totalFail = allResults.reduce((sum, emp) => 
+        sum + emp.groups.filter(r => !r.success).length, 0);
+      
+      let statusHtml = `<div style="background: #f0f0f0; border-radius: 5px; padding: 10px; font-size: 12px;">
+        <div style="color: #4CAF50; font-weight: bold; margin-bottom: 5px;">✅ 批量处理完成</div>
+        <div>成功: ${totalSuccess} 组, 失败: ${totalFail} 组</div>
+        <div style="background: #ddd; border-radius: 3px; height: 20px; margin-top: 5px; overflow: hidden;">
+          <div style="background: #4CAF50; height: 100%; width: 100%;"></div>
+        </div>`;
+      
+      if (totalFail > 0) {
+        statusHtml += `<div style="margin-top: 8px; padding: 8px; background: #ff9800; color: white; border-radius: 3px; font-size: 11px;">
+          <strong>失败的网组:</strong><br>`;
+        allResults.forEach(emp => {
+          emp.groups.filter(r => !r.success).forEach(r => {
+            statusHtml += `${emp.employee_id} - ${r.group}: ${r.error}<br>`;
+          });
+        });
+        statusHtml += `</div>`;
+      }
+      
+      statusHtml += `</div>`;
+      const statusInfo = document.getElementById('status-info');
+      if (statusInfo) {
+        statusInfo.style.display = 'block';
+        statusInfo.innerHTML = statusHtml;
+        setTimeout(() => {
+          if (statusInfo) {
+            statusInfo.innerHTML = '<div id="status-text">就绪</div>';
+            updateStatus('就绪', 'ready');
+          }
+        }, 10000);
+      }
+    }
+
+    // 绘制工号的行政区图
+    async function drawDistrictMapForEmployee(employeeId, employeeName, groups) {
+      // 收集该工号下所有网点的坐标
+      const allLocations = [];
+      Object.values(groups).forEach(groupLocs => {
+        allLocations.push(...groupLocs);
+      });
+      
+      if (allLocations.length === 0) return;
+      
+      // 调用后端API获取行政区信息
+      try {
+        const resp = await fetch('/get_district_boundary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ locations: allLocations })
+        });
+        const data = await resp.json();
+        
+        if (data.error || !data.success) {
+          console.error('获取行政区信息失败:', data.error || '未知错误');
+          return;
+        }
+        
+        // 按行政区分组
+        const districtsMap = {};
+        data.districts.forEach(dist => {
+          const districtName = dist.district;
+          if (districtName && districtName !== '未知区域' && districtName !== '查询失败') {
+            if (!districtsMap[districtName]) {
+              districtsMap[districtName] = [];
+            }
+            districtsMap[districtName].push(dist);
+          }
+        });
+        
+        // 清除地图
+        clearMap();
+        
+        // 定义颜色数组（用于不同行政区和不同网组）
+        const districtColors = [
+          '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
+          '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B739', '#52BE80'
+        ];
+        const groupColors = [
+          '#2196F3', '#FF5722', '#4CAF50', '#FF9800', '#9C27B0',
+          '#00BCD4', '#795548', '#607D8B', '#E91E63', '#009688'
+        ];
+        
+        // 绘制每个行政区的边界（使用Promise等待所有边界加载完成）
+        const districtPolygons = [];
+        const boundaryPromises = [];
+        let colorIndex = 0;
+        
+        for (const [districtName, districtLocs] of Object.entries(districtsMap)) {
+          const color = districtColors[colorIndex % districtColors.length];
+          colorIndex++;
+          
+          // 使用Promise包装Boundary API调用
+          const boundaryPromise = new Promise((resolve) => {
+            const boundary = new BMap.Boundary();
+            boundary.get(districtName, (rs) => {
+              if (rs.boundaries && rs.boundaries.length > 0) {
+                rs.boundaries.forEach(boundaryPath => {
+                  const points = boundaryPath.split(';').map(p => {
+                    const parts = p.split(',');
+                    if (parts.length >= 2) {
+                      return new BMap.Point(parseFloat(parts[0]), parseFloat(parts[1]));
+                    }
+                    return null;
+                  }).filter(p => p !== null);
+                  
+                  if (points.length > 0) {
+                    const polygon = new BMap.Polygon(points, {
+                      strokeWeight: 3,
+                      strokeColor: color,
+                      fillColor: color,
+                      fillOpacity: 0.2
+                    });
+                    map.addOverlay(polygon);
+                    districtPolygons.push(polygon);
+                  }
+                });
+              }
+              resolve();
+            });
+          });
+          boundaryPromises.push(boundaryPromise);
+        }
+        
+        // 等待所有边界绘制完成
+        await Promise.all(boundaryPromises);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // 收集所有边界点，用于最终调整视野
+        const allBoundaryPoints = [];
+        districtPolygons.forEach(polygon => {
+          try {
+            const path = polygon.getPath();
+            if (path && path.length > 0) {
+              path.forEach(point => {
+                allBoundaryPoints.push(point);
+              });
+            }
+          } catch (e) {
+            console.error('获取边界点失败:', e);
+          }
+        });
+        
+        // 绘制所有网点和路线（不同网组用不同颜色）
+        let groupIndex = 0;
+        let globalPointIndex = 1;  // 全局网点序号
+        
+        for (const [groupName, groupLocs] of Object.entries(groups)) {
+          const groupColor = groupColors[groupIndex % groupColors.length];
+          groupIndex++;
+          
+          // 优化路线以获取顺序
+          let optimizedLocs = groupLocs;
+          try {
+            const optimizeResp = await fetch('/optimize', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ locations: groupLocs })
+            });
+            const optimizeData = await optimizeResp.json();
+            
+            if (!optimizeData.error && optimizeData.route) {
+              optimizedLocs = optimizeData.route;
+            }
+          } catch (e) {
+            console.error(`优化网组 ${groupName} 路线失败:`, e);
+          }
+          
+          // 绘制网点（保留原来的圆圈数字顺序标识）
+          optimizedLocs.forEach((loc, idx) => {
+            const pt = new BMap.Point(loc.lng, loc.lat);
+            
+            // 使用createNumberMarker创建带数字的标记
+            const marker = createNumberMarker(pt, globalPointIndex, allLocations.length);
+            map.addOverlay(marker);
+            markers.push(marker);
+            
+            // 不显示名称标签（行政区图模式）
+            // 但保留标记点的数字圆圈
+            
+            globalPointIndex++;
+          });
+          
+          // 绘制路线（加粗，颜色分明）
+          try {
+            const optimizeResp = await fetch('/optimize', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ locations: groupLocs })
+            });
+            const optimizeData = await optimizeResp.json();
+            
+            if (!optimizeData.error && optimizeData.polyline) {
+              const routePoints = optimizeData.polyline.map(p => new BMap.Point(p[0], p[1]));
+              const polyline = new BMap.Polyline(routePoints, {
+                strokeColor: groupColor,
+                strokeWeight: 6,  // 加粗路线
+                strokeOpacity: 0.9
+              });
+              map.addOverlay(polyline);
+              overlays.push(polyline);
+            }
+          } catch (e) {
+            console.error(`绘制网组 ${groupName} 路线失败:`, e);
+          }
+        }
+        
+        // 合并所有点（网点 + 边界点）用于调整视野
+        const allPoints = allLocations.map(loc => new BMap.Point(loc.lng, loc.lat));
+        const combinedPoints = [...allPoints, ...allBoundaryPoints];
+        
+        // 等待一下确保所有覆盖物都已添加
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // 调整视野以适应所有内容（包括行政边界）
+        if (combinedPoints.length > 0) {
+          map.setViewport(combinedPoints);
+        } else if (allPoints.length > 0) {
+          map.setViewport(allPoints);
+        }
+        
+        // 等待渲染完成
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // 截图（使用特殊标记表示这是行政区图）
+        await captureScreenshot('__DISTRICT_MAP__', employeeId, employeeName);
+        
+      } catch (e) {
+        console.error('绘制行政区图失败:', e);
+        throw e;
+      }
     }
 
     function colorByIndex(i, total) {
@@ -1310,6 +1687,29 @@
     }
 
     // 按网组分组处理
+    // 按工号分组
+    function groupLocationsByEmployee(locations) {
+      const employees = {};
+      locations.forEach(loc => {
+        const employeeId = loc.employee_id || '';
+        if (employeeId && employeeId.trim()) {
+          if (!employees[employeeId]) {
+            employees[employeeId] = {
+              employee_id: employeeId,
+              employee_name: loc.employee_name || '',
+              groups: {}
+            };
+          }
+          const group = loc.group || '未分组';
+          if (!employees[employeeId].groups[group]) {
+            employees[employeeId].groups[group] = [];
+          }
+          employees[employeeId].groups[group].push(loc);
+        }
+      });
+      return employees;
+    }
+
     function groupLocationsByGroup(locations) {
       const groups = {};
       for (const loc of locations) {
@@ -1326,6 +1726,14 @@
     async function calculateRoute() {
       const locations = currentLocations.length ? currentLocations : parseLocationData();
       if (locations.length < 2) return showError('至少需要2个网点！');
+
+      // 先检查是否有工号，如果有工号则按工号分组处理
+      const employees = groupLocationsByEmployee(locations);
+      if (employees && Object.keys(employees).length > 0) {
+        excelEmployees = employees;
+        startBatchProcessByEmployee();
+        return;
+      }
 
       // 按网组分组
       const groups = groupLocationsByGroup(locations);
@@ -1357,6 +1765,14 @@
     async function optimizeRoute() {
       const locations = currentLocations.length ? currentLocations : parseLocationData();
       if (locations.length < 2) return showError('至少需要2个网点！');
+
+      // 先检查是否有工号，如果有工号则按工号分组处理
+      const employees = groupLocationsByEmployee(locations);
+      if (employees && Object.keys(employees).length > 0) {
+        excelEmployees = employees;
+        startBatchProcessByEmployee();
+        return;
+      }
 
       // 按网组分组
       const groups = groupLocationsByGroup(locations);
@@ -1406,7 +1822,7 @@
     }
 
     // 截图功能
-    async function captureScreenshot(groupName = '') {
+    async function captureScreenshot(groupName = '', employeeId = '', employeeName = '') {
       // 获取当前的UI状态（复选框状态）
       const uiState = {
         showFarthestLine: document.getElementById('toggleFarthest')?.checked ?? true,
@@ -1414,8 +1830,12 @@
         showRouteSimple: document.getElementById('toggleRouteSimple')?.checked ?? false
       };
       
+      // 判断是否为行政区图
+      const isDistrictMap = groupName === '__DISTRICT_MAP__';
+      const displayName = isDistrictMap ? '行政区图' : (groupName ? '网组 ' + groupName : '');
+      
       // 显示截图提示在状态区域（不影响路线详情页）
-      updateStatus(`📸 正在截图${groupName ? '网组 ' + groupName : ''}...`, 'loading');
+      updateStatus(`📸 正在截图${displayName}...`, 'loading');
       
       // 设置超时处理（30秒超时）
       const timeoutId = setTimeout(() => {
@@ -1434,7 +1854,9 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             ui_state: uiState,
-            group_name: groupName
+            group_name: groupName,
+            employee_id: employeeId,
+            employee_name: employeeName
           }),
           signal: controller.signal
         });
