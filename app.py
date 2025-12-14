@@ -35,7 +35,7 @@ except ImportError:
 # ==================== 配置常量 ====================
 # 服务器配置
 HOST = "127.0.0.1"
-PORT = 5005
+PORT = 5006
 DEBUG_MODE = True
 
 # 实际使用的端口（可能在启动时自动调整）
@@ -344,10 +344,10 @@ def _safe_float(x) -> float:
 def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
     """
     读取Excel文件，解析网点数据
-    支持列：经度、纬度、网点名称、备注(可选)、网组(可选)、工号(可选)、姓名(可选)
+    支持列：经度、纬度、网点名称、备注(可选)、网组(可选)、工号(可选)、姓名(可选)、县区(可选)
     
     Returns:
-        网点列表，每个网点包含：lng, lat, name, remark, group, employee_id, employee_name
+        网点列表，每个网点包含：lng, lat, name, remark, group, employee_id, employee_name, district
     """
     df = pd.read_excel(file_stream)
 
@@ -357,7 +357,7 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
     cols = set(df.columns.astype(str))
     missing = needed - cols
     if missing:
-        raise ValueError(f"Excel缺少列：{', '.join(missing)}。需要：经度、纬度、网点名称；备注、网组、工号、姓名可选。")
+        raise ValueError(f"Excel缺少列：{', '.join(missing)}。需要：经度、纬度、网点名称；备注、网组、工号、姓名、县区可选。")
 
     if "备注" not in df.columns:
         df["备注"] = ""
@@ -367,6 +367,8 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
         df["工号"] = ""
     if "姓名" not in df.columns:
         df["姓名"] = ""
+    if "县区" not in df.columns:
+        df["县区"] = ""
 
     locations = []
     for _, r in df.iterrows():
@@ -377,6 +379,7 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
         group = "" if pd.isna(r["网组"]) else str(r["网组"]).strip()
         employee_id = "" if pd.isna(r["工号"]) else str(r["工号"]).strip()
         employee_name = "" if pd.isna(r["姓名"]) else str(r["姓名"]).strip()
+        district = "" if pd.isna(r["县区"]) else str(r["县区"]).strip()
         if not name:
             continue
         if math.isnan(lng) or math.isnan(lat):
@@ -388,7 +391,8 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
             "remark": remark, 
             "group": group,
             "employee_id": employee_id,
-            "employee_name": employee_name
+            "employee_name": employee_name,
+            "district": district
         })
     return locations
 

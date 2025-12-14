@@ -147,8 +147,8 @@
     <div id="excel-tab" class="tab-content active">
       <div class="excel-template">
         <strong>📋 Excel格式要求：</strong><br>
-        列名：<code>经度</code> <code>纬度</code> <code>网点名称</code> <code>备注(可选)</code> <code>网组(可选)</code> <code>工号(可选)</code> <code>姓名(可选)</code><br>
-        <small style="color: #666;">支持批量导入：按"网组"列分组，每组依次标记点、连线、截图；如有工号，则按工号分组处理</small>
+        列名：<code>经度</code> <code>纬度</code> <code>网点名称</code> <code>备注(可选)</code> <code>网组(可选)</code> <code>工号(可选)</code> <code>姓名(可选)</code> <code>县区(可选)</code><br>
+        <small style="color: #666;">支持批量导入：按"网组"列分组，每组依次标记点、连线、截图；如有工号，则按工号分组处理；如有县区字段，用于绘制行政区划边界</small>
       </div>
 
       <div class="input-group">
@@ -165,7 +165,7 @@
 
     <div id="manual-tab" class="tab-content">
       <div class="input-group">
-        <label>网点数据（格式：经度,纬度,名称,备注可选,网组可选,工号可选,姓名可选）</label>
+        <label>网点数据（格式：经度,纬度,名称,备注可选,网组可选,工号可选,姓名可选,县区可选）</label>
         <textarea id="locationInput" rows="8"
           placeholder="116.397428,39.90923,北京营业部,备注A
 116.404,39.915,朝阳支行
@@ -516,7 +516,7 @@
 
       // 使用亮绿色 #00E676 (Material Design 亮绿色) 或 #00FF00 (纯绿色)
       const line = new BMap.Polyline([p1, p2], {
-        strokeWeight: 6,  // 增加线宽，更明显
+        strokeWeight: 4,  // 线条宽度（稍微细一点）
         strokeOpacity: 1.0,  // 完全不透明
         strokeColor: "#00FF00"  // 亮绿色
       });
@@ -766,11 +766,12 @@
         const group = parts.length > 4 ? parts[4].trim() : '';  // 第五列：网组
         const employee_id = parts.length > 5 ? parts[5].trim() : '';  // 第六列：工号
         const employee_name = parts.length > 6 ? parts[6].trim() : '';  // 第七列：姓名
+        const district = parts.length > 7 ? parts[7].trim() : '';  // 第八列：县区
         if (Number.isNaN(lng) || Number.isNaN(lat)) {
           errors.push(`第${idx + 1}行：经纬度格式错误`);
           return;
         }
-        locations.push({ lng, lat, name, remark, group, employee_id, employee_name });
+        locations.push({ lng, lat, name, remark, group, employee_id, employee_name, district });
       });
 
       if (errors.length) {
@@ -844,7 +845,7 @@
 
         if (currentLocations.length) {
           document.getElementById('locationInput').value =
-            currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || "", l.group || "", l.employee_id || "", l.employee_name || ""].filter(x => x !== "").join(',')).join('\n');
+            currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || "", l.group || "", l.employee_id || "", l.employee_name || "", l.district || ""].filter(x => x !== "").join(',')).join('\n');
         }
 
         // 如果有分组数据，显示自定义对话框选择截图模式
@@ -1154,176 +1155,322 @@
 
     // 绘制工号的行政区图
     async function drawDistrictMapForEmployee(employeeId, employeeName, groups) {
-      // 收集该工号下所有网点的坐标
-      const allLocations = [];
-      Object.values(groups).forEach(groupLocs => {
-        allLocations.push(...groupLocs);
+      try {
+        // 收集该工号下所有网点的坐标
+        const allLocations = [];
+        Object.values(groups).forEach(groupLocs => {
+          allLocations.push(...groupLocs);
+        });
+        
+        if (allLocations.length === 0) return;
+      
+      // 收集所有网组中的县区字段（用于绘制行政区边界）
+      const districtsFromField = new Set();
+      allLocations.forEach(loc => {
+        if (loc.district && loc.district.trim()) {
+          districtsFromField.add(loc.district.trim());
+        }
       });
       
-      if (allLocations.length === 0) return;
+      console.log(`[行政区图] 从县区字段获取到的行政区: ${Array.from(districtsFromField).join(', ')}`);
       
-      // 调用后端API获取行政区信息
-      try {
-        const resp = await fetch('/get_district_boundary', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ locations: allLocations })
+      // 如果提供了县区字段，直接使用县区字段；否则使用原来的逻辑（查询所有网点的行政区）
+      let districtsMap = {};
+      let useDistrictField = districtsFromField.size > 0;
+      
+      if (useDistrictField) {
+        // 使用县区字段提供的行政区名称
+        console.log(`[行政区图] 使用县区字段绘制行政区边界，共 ${districtsFromField.size} 个行政区`);
+        Array.from(districtsFromField).forEach(districtName => {
+          districtsMap[districtName] = [];  // 只需要行政区名称，不需要坐标信息
         });
-        const data = await resp.json();
+      } else {
+        // 如果没有县区字段，使用原来的逻辑：调用API查询所有网点的行政区
+        console.log(`[行政区图] 未提供县区字段，查询所有网点的行政区信息`);
         
-        if (data.error || !data.success) {
-          console.error('获取行政区信息失败:', data.error || '未知错误');
+        try {
+          const resp = await fetch('/get_district_boundary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ locations: allLocations })
+          });
+          const data = await resp.json();
+          
+          if (data.error || !data.success) {
+            console.error('获取行政区信息失败:', data.error || '未知错误');
+            return;
+          }
+          
+          // 按行政区分组
+          data.districts.forEach(dist => {
+            const districtName = dist.district;
+            if (districtName && districtName !== '未知区域' && districtName !== '查询失败') {
+              if (!districtsMap[districtName]) {
+                districtsMap[districtName] = [];
+              }
+              districtsMap[districtName].push(dist);
+            }
+          });
+          
+          console.log(`[行政区图] 查询到的行政区: ${Object.keys(districtsMap).join(', ')}`);
+        } catch (e) {
+          console.error('查询行政区信息失败:', e);
           return;
         }
+      }
+      
+      if (Object.keys(districtsMap).length === 0) {
+        console.warn(`[行政区图] ⚠️ 未找到有效行政区，跳过行政区边界绘制`);
+        return;
+      }
+      
+      // 清除地图
+      clearMap();
+      
+      // 定义颜色数组（用于不同行政区和不同网组）
+      const districtColors = [
+        '#D2122E', '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', 
+        '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B739'
+      ];
+      const groupColors = [
+        '#2196F3', '#FF5722', '#4CAF50', '#FF9800', '#9C27B0',
+        '#00BCD4', '#795548', '#607D8B', '#E91E63', '#009688'
+      ];
+      
+      // 函数：将颜色变亮（增加亮度）
+      function brightenColor(hex, percent = 30) {
+        // 移除 # 号
+        hex = hex.replace('#', '');
         
-        // 按行政区分组
-        const districtsMap = {};
-        data.districts.forEach(dist => {
-          const districtName = dist.district;
-          if (districtName && districtName !== '未知区域' && districtName !== '查询失败') {
-            if (!districtsMap[districtName]) {
-              districtsMap[districtName] = [];
-            }
-            districtsMap[districtName].push(dist);
+        // 转换为 RGB
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        
+        // 增加亮度
+        const newR = Math.min(255, Math.floor(r + (255 - r) * percent / 100));
+        const newG = Math.min(255, Math.floor(g + (255 - g) * percent / 100));
+        const newB = Math.min(255, Math.floor(b + (255 - b) * percent / 100));
+        
+        // 转换回十六进制
+        return '#' + 
+          newR.toString(16).padStart(2, '0') + 
+          newG.toString(16).padStart(2, '0') + 
+          newB.toString(16).padStart(2, '0');
+      }
+      
+      // 先绘制所有网组的路线和网点（不同网组用不同颜色）
+      let groupIndex = 0;
+      
+      console.log(`[行政区图] 开始绘制所有网组的路线和网点，共 ${Object.keys(groups).length} 个网组`);
+      
+      for (const [groupName, groupLocs] of Object.entries(groups)) {
+        const groupColor = groupColors[groupIndex % groupColors.length];
+        groupIndex++;
+        
+        console.log(`[行政区图] 绘制网组 ${groupName}，共 ${groupLocs.length} 个网点，颜色: ${groupColor}`);
+        
+        // 优化路线以获取顺序
+        let optimizedLocs = groupLocs;
+        try {
+          const optimizeResp = await fetch('/optimize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ locations: groupLocs })
+          });
+          const optimizeData = await optimizeResp.json();
+          
+          if (!optimizeData.error && optimizeData.route) {
+            optimizedLocs = optimizeData.route;
           }
+        } catch (e) {
+          console.error(`优化网组 ${groupName} 路线失败:`, e);
+        }
+        
+        // 先绘制路线（加粗，颜色分明），确保路线在底层
+        try {
+          const optimizeResp = await fetch('/optimize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ locations: groupLocs })
+          });
+          const optimizeData = await optimizeResp.json();
+          
+          if (!optimizeData.error && optimizeData.polyline) {
+            const routePoints = optimizeData.polyline.map(p => new BMap.Point(p[0], p[1]));
+            const polyline = new BMap.Polyline(routePoints, {
+              strokeColor: groupColor,
+              strokeWeight: 4,  // 路线线条（稍微细一点）
+              strokeOpacity: 0.9
+            });
+            map.addOverlay(polyline);
+            overlays.push(polyline);
+          }
+        } catch (e) {
+          console.error(`[行政区图] 绘制网组 ${groupName} 路线失败:`, e);
+        }
+        
+        // 后绘制网点（使用加粗圆圈标注，不同网组用不同颜色），确保圆圈在上层显示
+        // 使用更亮的颜色来绘制网点圆圈
+        const brightGroupColor = brightenColor(groupColor, 40);  // 增加40%亮度
+        
+        optimizedLocs.forEach((loc, idx) => {
+          const pt = new BMap.Point(loc.lng, loc.lat);
+          
+          // 使用加粗圆圈标注网点，不同网组用更亮的颜色（放大圆圈，一眼就能看到）
+          const circle = new BMap.Circle(pt, 55, {  // 增大半径到55，更明显
+            fillColor: brightGroupColor,  // 使用更亮的颜色
+            fillOpacity: 1,
+            strokeWeight: 6,  // 边框
+            strokeColor: '#fff',  // 白色边框，更醒目
+            strokeOpacity: 1
+          });
+          map.addOverlay(circle);
+          markers.push(circle);
         });
         
-        // 清除地图
-        clearMap();
-        
-        // 定义颜色数组（用于不同行政区和不同网组）
-        const districtColors = [
-          '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
-          '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B739', '#52BE80'
-        ];
-        const groupColors = [
-          '#2196F3', '#FF5722', '#4CAF50', '#FF9800', '#9C27B0',
-          '#00BCD4', '#795548', '#607D8B', '#E91E63', '#009688'
-        ];
-        
-        // 绘制每个行政区的边界（使用Promise等待所有边界加载完成）
-        const districtPolygons = [];
-        const boundaryPromises = [];
-        let colorIndex = 0;
-        
-        for (const [districtName, districtLocs] of Object.entries(districtsMap)) {
+        console.log(`[行政区图] 网组 ${groupName} 已绘制 ${optimizedLocs.length} 个网点圆圈`);
+      }
+      
+      // 等待所有网组路线和网点绘制完成
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // 现在绘制行政区边界（在路线和网点之上）
+      // 如果提供了县区字段，绘制所有网组所在县区的边界；否则绘制查询到的行政区边界
+      console.log(`[行政区图] 开始绘制行政区边界，共 ${Object.keys(districtsMap).length} 个行政区`);
+      
+      const districtPolygons = [];
+      const boundaryPromises = [];
+      let colorIndex = 0;
+      
+      for (const [districtName, districtLocs] of Object.entries(districtsMap)) {
           const color = districtColors[colorIndex % districtColors.length];
           colorIndex++;
           
-          // 使用Promise包装Boundary API调用
-          const boundaryPromise = new Promise((resolve) => {
-            const boundary = new BMap.Boundary();
-            boundary.get(districtName, (rs) => {
-              if (rs.boundaries && rs.boundaries.length > 0) {
-                rs.boundaries.forEach(boundaryPath => {
-                  const points = boundaryPath.split(';').map(p => {
-                    const parts = p.split(',');
-                    if (parts.length >= 2) {
-                      return new BMap.Point(parseFloat(parts[0]), parseFloat(parts[1]));
-                    }
-                    return null;
-                  }).filter(p => p !== null);
-                  
-                  if (points.length > 0) {
-                    const polygon = new BMap.Polygon(points, {
-                      strokeWeight: 3,
-                      strokeColor: color,
-                      fillColor: color,
-                      fillOpacity: 0.2
-                    });
-                    map.addOverlay(polygon);
-                    districtPolygons.push(polygon);
-                  }
-                });
+          console.log(`[行政区图] 处理行政区: ${districtName}`);
+          
+          // 如果使用县区字段，直接使用字段值；否则尝试不同的名称格式
+          let nameVariants = [];
+          
+          if (useDistrictField) {
+            // 使用县区字段提供的名称，直接使用
+            nameVariants.push(districtName);
+            // 也可以尝试一些常见变体（去掉省、市等前缀）
+            const nameWithoutProvince = districtName.replace(/^[^省]+省/, '').replace(/^[^市]+市/, '');
+            if (nameWithoutProvince && nameWithoutProvince !== districtName) {
+              nameVariants.push(nameWithoutProvince);
+            }
+            // 尝试去掉"区"、"县"、"市"后缀后的名称
+            const nameWithoutSuffix = districtName.replace(/[区县市]$/, '');
+            if (nameWithoutSuffix && nameWithoutSuffix !== districtName) {
+              nameVariants.push(nameWithoutSuffix);
+            }
+          } else {
+            // 如果没有县区字段，使用原来的逻辑：尝试不同的名称格式
+            if (districtLocs && districtLocs.length > 0) {
+              const firstDist = districtLocs[0];
+              
+              // 优先尝试区县名（最常用）
+              if (firstDist.district_level) {
+                nameVariants.push(firstDist.district_level);  // "建邺区"
               }
-              resolve();
-            });
+              
+              // 尝试市+区县
+              if (firstDist.city && firstDist.district_level) {
+                const cityName = firstDist.city.replace('市', '');
+                nameVariants.push(cityName + firstDist.district_level);  // "南京建邺区"
+                nameVariants.push(firstDist.city + firstDist.district_level);  // "南京市建邺区"
+              }
+            }
+            
+            // 最后尝试完整格式
+            nameVariants.push(districtName);  // "江苏南京市建邺区"
+          }
+          
+          // 去重
+          const uniqueVariants = [...new Set(nameVariants)];
+          console.log(`[行政区图] 将尝试的名称格式:`, uniqueVariants);
+          
+          // 使用Promise包装Boundary API调用（参考xzqh.html的实现方式）
+          const boundaryPromise = new Promise((resolve) => {
+            let boundaryFound = false;
+            let attemptIndex = 0;
+            
+            const tryGetBoundary = (nameToTry) => {
+              console.log(`[行政区图] 尝试获取边界: ${nameToTry}`);
+              const boundary = new BMap.Boundary();
+              boundary.get(nameToTry, (rs) => {
+                console.log(`[行政区图] Boundary API返回结果:`, rs);
+                if (rs && rs.boundaries && rs.boundaries.length > 0) {
+                  console.log(`[行政区图] ✓ 成功获取 ${nameToTry} 的边界，共 ${rs.boundaries.length} 个边界`);
+                  boundaryFound = true;
+                  
+                  // 参考xzqh.html：直接使用boundaries[i]作为参数传给Polygon
+                  for (let i = 0; i < rs.boundaries.length; i++) {
+                    try {
+                      const polygon = new BMap.Polygon(rs.boundaries[i], {
+                        strokeWeight: 3,
+                        strokeColor: color,
+                        strokeOpacity: 0.9,
+                        fillOpacity: 0,  // 不填充，只显示边界线
+                        strokeStyle: "solid"
+                      });
+                      map.addOverlay(polygon);
+                      overlays.push(polygon);  // 添加到overlays数组，确保clearMap()能清除
+                      districtPolygons.push(polygon);
+                      console.log(`[行政区图] ✓ 成功绘制多边形 ${i + 1}/${rs.boundaries.length}`);
+                    } catch (polyErr) {
+                      console.error(`[行政区图] ❌ 绘制多边形 ${i + 1} 失败:`, polyErr);
+                    }
+                  }
+                  resolve();
+                } else {
+                  // 如果当前名称格式失败，尝试下一个
+                  attemptIndex++;
+                  if (attemptIndex < uniqueVariants.length && !boundaryFound) {
+                    console.log(`[行政区图] ⚠️ ${nameToTry} 未找到边界 (boundaries: ${rs?.boundaries?.length || 0})，尝试下一个格式...`);
+                    tryGetBoundary(uniqueVariants[attemptIndex]);
+                  } else {
+                    console.log(`[行政区图] ❌ 所有格式都失败，无法获取 ${districtName} 的边界`);
+                    console.log(`[行政区图] 尝试过的名称格式:`, uniqueVariants);
+                    resolve();  // 即使失败也resolve，不阻塞其他行政区的绘制
+                  }
+                }
+              });
+            };
+            
+            // 开始尝试第一个名称格式
+            if (uniqueVariants.length > 0) {
+              tryGetBoundary(uniqueVariants[0]);
+            } else {
+              // 如果没有可用的名称变体，直接使用原始名称
+              tryGetBoundary(districtName);
+            }
           });
           boundaryPromises.push(boundaryPromise);
         }
         
         // 等待所有边界绘制完成
         await Promise.all(boundaryPromises);
+        console.log(`[行政区图] 边界绘制完成，共 ${districtPolygons.length} 个多边形`);
         await new Promise(resolve => setTimeout(resolve, 1000));
         
         // 收集所有边界点，用于最终调整视野
         const allBoundaryPoints = [];
-        districtPolygons.forEach(polygon => {
+        districtPolygons.forEach((polygon, idx) => {
           try {
             const path = polygon.getPath();
             if (path && path.length > 0) {
               path.forEach(point => {
                 allBoundaryPoints.push(point);
               });
+              console.log(`[行政区图] 多边形 ${idx + 1} 有 ${path.length} 个点`);
             }
           } catch (e) {
-            console.error('获取边界点失败:', e);
+            console.error(`[行政区图] 获取边界点失败 (多边形 ${idx + 1}):`, e);
           }
         });
-        
-        // 绘制所有网点和路线（不同网组用不同颜色）
-        let groupIndex = 0;
-        let globalPointIndex = 1;  // 全局网点序号
-        
-        for (const [groupName, groupLocs] of Object.entries(groups)) {
-          const groupColor = groupColors[groupIndex % groupColors.length];
-          groupIndex++;
-          
-          // 优化路线以获取顺序
-          let optimizedLocs = groupLocs;
-          try {
-            const optimizeResp = await fetch('/optimize', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ locations: groupLocs })
-            });
-            const optimizeData = await optimizeResp.json();
-            
-            if (!optimizeData.error && optimizeData.route) {
-              optimizedLocs = optimizeData.route;
-            }
-          } catch (e) {
-            console.error(`优化网组 ${groupName} 路线失败:`, e);
-          }
-          
-          // 绘制网点（保留原来的圆圈数字顺序标识）
-          optimizedLocs.forEach((loc, idx) => {
-            const pt = new BMap.Point(loc.lng, loc.lat);
-            
-            // 使用createNumberMarker创建带数字的标记
-            const marker = createNumberMarker(pt, globalPointIndex, allLocations.length);
-            map.addOverlay(marker);
-            markers.push(marker);
-            
-            // 不显示名称标签（行政区图模式）
-            // 但保留标记点的数字圆圈
-            
-            globalPointIndex++;
-          });
-          
-          // 绘制路线（加粗，颜色分明）
-          try {
-            const optimizeResp = await fetch('/optimize', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ locations: groupLocs })
-            });
-            const optimizeData = await optimizeResp.json();
-            
-            if (!optimizeData.error && optimizeData.polyline) {
-              const routePoints = optimizeData.polyline.map(p => new BMap.Point(p[0], p[1]));
-              const polyline = new BMap.Polyline(routePoints, {
-                strokeColor: groupColor,
-                strokeWeight: 6,  // 加粗路线
-                strokeOpacity: 0.9
-              });
-              map.addOverlay(polyline);
-              overlays.push(polyline);
-            }
-          } catch (e) {
-            console.error(`绘制网组 ${groupName} 路线失败:`, e);
-          }
-        }
+        console.log(`[行政区图] 总共收集到 ${allBoundaryPoints.length} 个边界点`);
         
         // 合并所有点（网点 + 边界点）用于调整视野
         const allPoints = allLocations.map(loc => new BMap.Point(loc.lng, loc.lat));
@@ -1332,24 +1479,75 @@
         // 等待一下确保所有覆盖物都已添加
         await new Promise(resolve => setTimeout(resolve, 500));
         
-        // 调整视野以适应所有内容（包括行政边界）
+        // 调整视野以适应所有内容（包括行政边界），确保能看到所有网点但不要缩放过小
         if (combinedPoints.length > 0) {
+          console.log(`[行政区图] 调整视野，包含 ${combinedPoints.length} 个点（${allPoints.length} 个网点 + ${allBoundaryPoints.length} 个边界点）`);
           map.setViewport(combinedPoints);
+          
+          // 等待视野调整完成
+          await new Promise(resolve => setTimeout(resolve, 500));
+          const currentZoom = map.getZoom();
+          
+          // 如果缩放级别太小（< 11），稍微放大一点，确保网点清晰可见
+          if (currentZoom < 11) {
+            map.setZoom(11);
+            console.log(`[行政区图] 调整缩放级别: ${currentZoom} -> 11（确保网点清晰可见）`);
+          } else if (currentZoom > 15) {
+            // 如果缩放级别太大（> 15），稍微缩小一点，确保能看到完整的行政区边界
+            map.setZoom(15);
+            console.log(`[行政区图] 调整缩放级别: ${currentZoom} -> 15（确保能看到完整边界）`);
+          }
+        } else if (allBoundaryPoints.length > 0) {
+          // 如果只有边界点，使用边界点调整视野
+          console.log(`[行政区图] 使用边界点调整视野，共 ${allBoundaryPoints.length} 个点`);
+          map.setViewport(allBoundaryPoints);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          const currentZoom = map.getZoom();
+          if (currentZoom < 11) {
+            map.setZoom(11);
+          } else if (currentZoom > 15) {
+            map.setZoom(15);
+          }
         } else if (allPoints.length > 0) {
+          // 如果只有网点，使用网点调整视野，确保能看到所有网点
+          console.log(`[行政区图] 使用网点调整视野，共 ${allPoints.length} 个点`);
           map.setViewport(allPoints);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          const currentZoom = map.getZoom();
+          // 确保缩放级别合适，能看到所有网点但不要太小
+          if (currentZoom < 11) {
+            map.setZoom(11);
+            console.log(`[行政区图] 调整缩放级别: ${currentZoom} -> 11（确保网点清晰可见）`);
+          }
         }
         
         // 等待渲染完成
+        console.log('[行政区图] 等待地图渲染完成...');
         await new Promise(resolve => setTimeout(resolve, 2000));
         
+        console.log('[行政区图] 开始截图...');
         // 截图（使用特殊标记表示这是行政区图）
         await captureScreenshot('__DISTRICT_MAP__', employeeId, employeeName);
+        console.log('[行政区图] 截图完成');
         
-      } catch (e) {
-        console.error('绘制行政区图失败:', e);
-        throw e;
+        // 截图完成后，清除地图上的所有覆盖物（路线、边框、网点圆圈），避免影响下一个员工
+        console.log('[行政区图] 清除地图覆盖物，准备下一个员工的数据...');
+        clearMap();
+        // 等待清除完成
+        await new Promise(resolve => setTimeout(resolve, 300));
+        console.log('[行政区图] 地图已清除，可以处理下一个员工的数据');
+        
+    } catch (e) {
+      console.error('绘制行政区图失败:', e);
+      // 即使出错也要清除地图，避免影响下一个员工
+      try {
+        clearMap();
+      } catch (clearErr) {
+        console.error('清除地图失败:', clearErr);
       }
+      throw e;
     }
+  }
 
     function colorByIndex(i, total) {
       return '#2196F3';
@@ -1506,7 +1704,7 @@
       // 第一步：绘制路线和距离标记（先绘制底层元素）
       if (polyline && polyline.length) {
         const routePts = polyline.map(p => new BMap.Point(p[0], p[1]));
-        const line = new BMap.Polyline(routePts, { strokeWeight: 5, strokeOpacity: 0.9, strokeColor: "#2196F3" });
+        const line = new BMap.Polyline(routePts, { strokeWeight: 4, strokeOpacity: 0.9, strokeColor: "#2196F3" });
         map.addOverlay(line);
         overlays.push(line);
         
