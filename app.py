@@ -7,7 +7,10 @@
 from __future__ import annotations
 
 import os
+import sys
 import math
+import platform
+import socket
 import threading
 import time
 from typing import List, Dict, Any, Tuple, Optional
@@ -21,9 +24,11 @@ try:
     from selenium import webdriver
     from selenium.webdriver.edge.service import Service
     from selenium.webdriver.edge.options import Options
+    from selenium.webdriver.common.by import By
     SELENIUM_AVAILABLE = True
 except ImportError:
     SELENIUM_AVAILABLE = False
+    By = None
     print("⚠️ 警告：未安装 selenium，将无法自动打开浏览器")
     print("   建议安装：pip install selenium")
 
@@ -32,6 +37,9 @@ except ImportError:
 HOST = "127.0.0.1"
 PORT = 5005
 DEBUG_MODE = True
+
+# 实际使用的端口（可能在启动时自动调整）
+_actual_port = PORT
 
 # 全局浏览器实例（用于截图功能复用）
 _global_browser_driver = None
@@ -51,6 +59,243 @@ app = Flask(__name__)
 def _require_ak():
     if not BAIDU_WEB_AK:
         raise RuntimeError("后端未配置 BAIDU_WEB_AK。请设置环境变量 BAIDU_WEB_AK 或在 app.py 中写入。")
+
+
+def _get_base_dir():
+    """
+    获取程序基础目录
+    在打包成exe后，返回exe所在目录；在开发环境中，返回脚本所在目录
+    """
+    if getattr(sys, 'frozen', False):
+        # 打包成exe后，使用exe所在目录
+        return os.path.dirname(sys.executable)
+    else:
+        # 开发环境，使用脚本所在目录
+        return os.path.dirname(os.path.abspath(__file__))
+
+
+def _get_actual_port():
+    """
+    获取实际使用的端口号
+    如果端口被占用，可能会自动调整到其他可用端口
+    """
+    global _actual_port
+    return _actual_port
+
+
+def _is_port_available(host: str, port: int) -> bool:
+    """
+    检查端口是否可用
+    
+    Args:
+        host: 主机地址
+        port: 端口号
+    
+    Returns:
+        如果端口可用返回 True，否则返回 False
+    """
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            result = s.connect_ex((host, port))
+            return result != 0  # 0 表示连接成功（端口被占用）
+    except Exception:
+        return False
+
+
+def _find_available_port(host: str, start_port: int, max_attempts: int = 10) -> int:
+    """
+    查找可用端口
+    
+    Args:
+        host: 主机地址
+        start_port: 起始端口号
+        max_attempts: 最大尝试次数
+    
+    Returns:
+        可用的端口号，如果找不到则返回 None
+    """
+    for i in range(max_attempts):
+        port = start_port + i
+        if _is_port_available(host, port):
+            return port
+    return None
+
+
+def _get_edge_binary_path():
+    """
+    根据操作系统获取 Edge 浏览器的可执行文件路径
+    
+    Returns:
+        Edge 浏览器路径，如果未找到返回 None
+    """
+    system = platform.system()
+    
+    if system == "Windows":
+        # Windows 系统下的 Edge 路径
+        edge_paths = [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ]
+        for path in edge_paths:
+            if os.path.exists(path):
+                print(f"[系统检测] 检测到 Windows 系统，使用 Edge 路径: {path}")
+                return path
+        print("[系统检测] ⚠️ Windows 系统下未找到 Edge 浏览器")
+        return None
+    
+    elif system == "Darwin":  # macOS
+        # macOS 系统下的 Edge 路径
+        edge_paths = [
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        ]
+        for path in edge_paths:
+            if os.path.exists(path):
+                print(f"[系统检测] 检测到 macOS 系统，使用 Edge 路径: {path}")
+                return path
+        print("[系统检测] ⚠️ macOS 系统下未找到 Edge 浏览器")
+        return None
+    
+    else:
+        # Linux 或其他系统
+        print(f"[系统检测] ⚠️ 未支持的操作系统: {system}")
+        return None
+
+
+def _create_browser_instance():
+    """
+    创建新的浏览器实例
+    返回: webdriver实例，如果失败返回None
+    """
+    global _global_browser_driver
+    
+    if not SELENIUM_AVAILABLE:
+        print("[浏览器] ⚠️ Selenium 未安装，无法创建浏览器实例")
+        return None
+    
+    try:
+        with _browser_lock:
+            # 如果已有浏览器实例，先尝试关闭
+            if _global_browser_driver is not None:
+                try:
+                    _global_browser_driver.quit()
+                except:
+                    pass
+                _global_browser_driver = None
+            
+            print(f"[浏览器] 正在使用 Selenium 启动 Edge 浏览器...")
+            
+            # 获取 Edge 浏览器路径
+            edge_binary_path = _get_edge_binary_path()
+            
+            # 配置 Edge 浏览器选项（隐藏自动化标识，防止窗口被关闭）
+            edge_options = Options()
+            
+            # 如果找到了 Edge 路径，设置浏览器可执行文件路径
+            if edge_binary_path:
+                edge_options.binary_location = edge_binary_path
+                print(f"[浏览器] 已设置 Edge 浏览器路径: {edge_binary_path}")
+            else:
+                print("[浏览器] ⚠️ 未找到 Edge 浏览器路径，将使用系统默认路径")
+            
+            edge_options.add_argument('--window-size=1920,1080')
+            edge_options.add_argument('--disable-blink-features=AutomationControlled')
+            edge_options.add_experimental_option('excludeSwitches', ['enable-automation'])
+            edge_options.add_experimental_option('useAutomationExtension', False)
+            edge_options.page_load_strategy = 'normal'
+            # 防止浏览器被意外关闭
+            edge_options.add_argument('--disable-infobars')  # 隐藏信息栏
+            edge_options.add_argument('--no-first-run')  # 跳过首次运行
+            edge_options.add_argument('--no-default-browser-check')  # 跳过默认浏览器检查
+            # 保持浏览器打开（即使所有标签页关闭）
+            edge_options.add_experimental_option('detach', True)  # 保持浏览器进程运行
+            
+            # 启动浏览器
+            service = Service()
+            driver = webdriver.Edge(service=service, options=edge_options)
+            driver.set_page_load_timeout(20)
+            driver.implicitly_wait(5)
+            
+            # 访问页面
+            url = f"http://{HOST}:{_get_actual_port()}"
+            print(f"[浏览器] 正在访问: {url}")
+            driver.get(url)
+            
+            # 保存到全局变量
+            _global_browser_driver = driver
+            
+            print(f"✓ 已使用 Selenium 打开 Edge 浏览器: {url}")
+            print(f"   浏览器实例已保存，截图功能将复用此实例")
+            print(f"   ⚠️ 重要提示：请勿关闭此浏览器窗口，否则截图功能将无法正常工作！")
+            
+            return driver
+            
+    except Exception as e:
+        print(f"[浏览器] ⚠️ 创建浏览器实例失败: {e}")
+        _global_browser_driver = None
+        return None
+
+
+def _check_browser_instance():
+    """
+    检查浏览器实例是否有效
+    如果无效，尝试重新创建
+    返回: 有效的浏览器实例，如果失败返回None
+    """
+    global _global_browser_driver
+    
+    # 如果浏览器实例不存在，创建新的
+    if _global_browser_driver is None:
+        print("[浏览器检查] 浏览器实例不存在，正在创建...")
+        return _create_browser_instance()
+    
+    # 检查浏览器实例是否有效（包括窗口是否仍然打开）
+    try:
+        # 检查窗口句柄是否存在（如果窗口被关闭，这个会失败）
+        window_handles = _global_browser_driver.window_handles
+        if not window_handles:
+            raise Exception("浏览器窗口已被关闭（没有活动窗口）")
+        
+        # 切换到第一个窗口（确保有活动窗口）
+        _global_browser_driver.switch_to.window(window_handles[0])
+        
+        # 尝试获取当前URL来验证浏览器是否仍然有效
+        current_url = _global_browser_driver.current_url
+        target_url = f"http://{HOST}:{_get_actual_port()}"
+        
+        # 检查页面是否已经加载了应用（通过检查关键元素）
+        # 如果页面已经加载，就不刷新，避免丢失已渲染的内容
+        try:
+            # 检查控制面板是否存在（说明应用已加载）
+            if By is not None:
+                control_panel = _global_browser_driver.find_elements(By.ID, "control-panel")
+            else:
+                control_panel = _global_browser_driver.find_elements("id", "control-panel")
+            # 如果当前URL包含目标URL的基础部分，且控制面板存在，说明页面已加载
+            if control_panel and (target_url in current_url or current_url.startswith(target_url.split('?')[0].split('#')[0])):
+                print(f"[浏览器检查] ✓ 页面已加载应用，无需刷新（当前URL: {current_url}）")
+            else:
+                # 只有在页面确实不在应用页面时，才刷新
+                print(f"[浏览器检查] 当前URL ({current_url}) 不是目标URL，正在导航到: {target_url}")
+                _global_browser_driver.get(target_url)
+                # 等待页面加载
+                time.sleep(1)
+        except Exception as check_e:
+            # 如果检查失败，尝试导航到目标URL
+            print(f"[浏览器检查] 检查页面状态失败: {check_e}，尝试导航到: {target_url}")
+            _global_browser_driver.get(target_url)
+            # 等待页面加载
+            time.sleep(1)
+        
+        print(f"[浏览器检查] ✓ 浏览器实例有效，当前URL: {current_url}")
+        return _global_browser_driver
+    except Exception as e:
+        print(f"[浏览器检查] ⚠️ 浏览器实例无效: {e}")
+        print("[浏览器检查] 正在重新创建浏览器实例...")
+        # 清空无效的实例
+        with _browser_lock:
+            _global_browser_driver = None
+        return _create_browser_instance()
 
 
 def _safe_float(x) -> float:
@@ -489,36 +734,112 @@ def capture_screenshot_endpoint():
         ui_state = data.get('ui_state', {})
         
         # 获取当前应用URL
-        url = f"http://{HOST}:{PORT}"
+        url = f"http://{HOST}:{_get_actual_port()}"
         
-        # 截图保存目录
-        save_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "网点图")
+        # 截图保存目录（打包后保存到exe所在目录的"网点图"文件夹）
+        base_dir = _get_base_dir()
+        save_dir = os.path.join(base_dir, "网点图")
         
-        # 传递全局浏览器实例给截图模块（优先使用已打开的浏览器）
-        global _global_browser_driver
-        driver_instance = _global_browser_driver
+        # 检查并确保浏览器实例有效（如果失效会自动重新创建）
+        driver_instance = _check_browser_instance()
         
         if driver_instance is None:
-            print("[截图API] ⚠️ 警告：未检测到已打开的浏览器实例")
-            print("[截图API]   截图功能将启动新的浏览器实例（可能不是用户当前查看的页面）")
-        else:
-            print("[截图API] ✓ 使用已打开的浏览器实例进行截图")
+            error_msg = "无法创建浏览器实例。请确保已安装selenium和Edge浏览器，并检查EdgeDriver是否正确安装。"
+            print(f"[截图API] ❌ {error_msg}")
+            return jsonify({"error": error_msg}), 500
+        
+        # 再次验证浏览器窗口是否打开（双重检查）
+        try:
+            window_handles = driver_instance.window_handles
+            if not window_handles:
+                print("[截图API] ⚠️ 检测到浏览器窗口已关闭，正在重新创建...")
+                driver_instance = _create_browser_instance()
+                if driver_instance is None:
+                    return jsonify({"error": "浏览器窗口已关闭且无法重新创建，请重新启动程序"}), 500
+            else:
+                # 确保切换到活动窗口
+                driver_instance.switch_to.window(window_handles[0])
+                # 检查页面是否已经加载了应用（通过检查关键元素）
+                # 如果页面已经加载，就不刷新，避免丢失已渲染的内容
+                try:
+                    # 检查控制面板是否存在（说明应用已加载）
+                    if By is not None:
+                        control_panel = driver_instance.find_elements(By.ID, "control-panel")
+                    else:
+                        control_panel = driver_instance.find_elements("id", "control-panel")
+                    current_url = driver_instance.current_url
+                    # 如果当前URL包含目标URL的基础部分，且控制面板存在，说明页面已加载
+                    if control_panel and (url in current_url or current_url.startswith(f"http://{HOST}:{_get_actual_port()}")):
+                        print(f"[截图API] ✓ 页面已加载，无需刷新（当前URL: {current_url}）")
+                    else:
+                        # 只有在页面确实不在应用页面时，才刷新
+                        print(f"[截图API] 页面未加载应用，正在导航到: {url}")
+                        driver_instance.get(url)
+                        time.sleep(1)
+                except Exception as check_e:
+                    # 如果检查失败，尝试导航到目标URL
+                    print(f"[截图API] 检查页面状态失败: {check_e}，尝试导航到: {url}")
+                    driver_instance.get(url)
+                    time.sleep(1)
+        except Exception as e:
+            print(f"[截图API] ⚠️ 检查浏览器窗口时出错: {e}，尝试重新创建...")
+            driver_instance = _create_browser_instance()
+            if driver_instance is None:
+                return jsonify({"error": f"浏览器检查失败且无法重新创建: {str(e)}"}), 500
+        
+        print("[截图API] ✓ 使用浏览器实例进行截图")
         
         # 获取网组名称（用于截图文件命名）
         group_name = data.get('group_name', '')
         
         # 执行截图（传递UI状态、浏览器实例和网组名称，等待3秒，确保页面和控制面板滚动完成）
-        filepath = capture_screenshot_sync(
-            url, 
-            save_dir=save_dir, 
-            wait_time=3, 
-            ui_state=ui_state,
-            driver_instance=driver_instance,
-            group_name=group_name
-        )
+        # 如果截图失败且是因为浏览器实例失效，会尝试重新创建并重试一次
+        try:
+            filepath = capture_screenshot_sync(
+                url, 
+                save_dir=save_dir, 
+                wait_time=3, 
+                ui_state=ui_state,
+                driver_instance=driver_instance,
+                group_name=group_name
+            )
+        except Exception as e:
+            error_str = str(e).lower()
+            # 如果错误信息包含"invalid session id"、"浏览器实例无效"、"窗口已被关闭"等，尝试重新创建浏览器并重试
+            if any(keyword in error_str for keyword in [
+                "invalid session id", 
+                "浏览器实例无效", 
+                "浏览器会话", 
+                "窗口已被关闭",
+                "no such window",
+                "window not found",
+                "target window",
+                "no window"
+            ]):
+                print(f"[截图API] ⚠️ 检测到浏览器会话失效或窗口关闭: {str(e)}")
+                print("[截图API] 正在重新创建浏览器实例并重试...")
+                driver_instance = _create_browser_instance()
+                if driver_instance is None:
+                    return jsonify({"error": "浏览器实例失效且无法重新创建，请重新启动程序"}), 500
+                # 重试截图
+                try:
+                    filepath = capture_screenshot_sync(
+                        url, 
+                        save_dir=save_dir, 
+                        wait_time=3, 
+                        ui_state=ui_state,
+                        driver_instance=driver_instance,
+                        group_name=group_name
+                    )
+                except Exception as retry_e:
+                    # 重试也失败，返回错误
+                    return jsonify({"error": f"截图失败（重试后仍失败）: {str(retry_e)}"}), 500
+            else:
+                # 其他错误直接抛出
+                raise
         
-        # 返回相对路径
-        rel_path = os.path.relpath(filepath, os.path.dirname(os.path.abspath(__file__)))
+        # 返回相对路径（基于base_dir）
+        rel_path = os.path.relpath(filepath, base_dir)
         
         return jsonify({
             "success": True,
@@ -539,69 +860,56 @@ if __name__ == "__main__":
     """
     import os
     
-    # 使用 Selenium 打开浏览器的函数
+    # 检查端口是否可用，如果被占用则自动查找可用端口
+    actual_port = PORT
+    if not _is_port_available(HOST, PORT):
+        print(f"⚠️ 端口 {PORT} 已被占用，正在查找可用端口...")
+        available_port = _find_available_port(HOST, PORT, max_attempts=10)
+        if available_port:
+            actual_port = available_port
+            print(f"✓ 找到可用端口: {actual_port}")
+        else:
+            print(f"❌ 错误：无法找到可用端口（已尝试 {PORT} 到 {PORT + 9}）")
+            print(f"   请关闭占用端口的程序，或修改 PORT 配置")
+            sys.exit(1)
+    
+    # 更新全局实际端口变量
+    _actual_port = actual_port
+    
+    # 使用 Selenium 打开浏览器的函数（使用闭包捕获 actual_port）
     def open_browser():
         """延迟打开浏览器，确保服务器已启动，使用 Selenium 打开浏览器供截图功能复用"""
-        global _global_browser_driver
-        
         time.sleep(1.5)  # 等待服务器启动
-        url = f"http://{HOST}:{PORT}"
+        url = f"http://{HOST}:{actual_port}"
         
         if not SELENIUM_AVAILABLE:
             print(f"⚠ Selenium 未安装，无法自动打开浏览器")
             print(f"   请手动访问: {url}")
             return
         
-        try:
-            with _browser_lock:
-                if _global_browser_driver is not None:
-                    print(f"✓ 浏览器已打开，正在访问: {url}")
-                    try:
-                        _global_browser_driver.get(url)
-                    except Exception as e:
-                        print(f"⚠ 访问页面失败: {e}")
-                    return
-                
-                print(f"[浏览器] 正在使用 Selenium 启动 Edge 浏览器...")
-                
-                # 配置 Edge 浏览器选项（隐藏自动化标识）
-                edge_options = Options()
-                edge_options.add_argument('--window-size=1920,1080')
-                edge_options.add_argument('--disable-blink-features=AutomationControlled')
-                edge_options.add_experimental_option('excludeSwitches', ['enable-automation'])
-                edge_options.add_experimental_option('useAutomationExtension', False)
-                edge_options.page_load_strategy = 'normal'
-                
-                # 启动浏览器
-                service = Service()
-                driver = webdriver.Edge(service=service, options=edge_options)
-                driver.set_page_load_timeout(20)
-                driver.implicitly_wait(5)
-                
-                # 访问页面
-                print(f"[浏览器] 正在访问: {url}")
-                driver.get(url)
-                
-                # 保存到全局变量
-                _global_browser_driver = driver
-                
-                print(f"✓ 已使用 Selenium 打开 Edge 浏览器: {url}")
-                print(f"   浏览器实例已保存，截图功能将复用此实例")
-                
-        except Exception as e:
-            print(f"⚠ 使用 Selenium 打开浏览器失败: {e}")
+        # 检查是否已有有效的浏览器实例
+        driver = _check_browser_instance()
+        if driver is None:
+            print(f"⚠ 无法创建浏览器实例")
             print(f"   请手动访问: {url}")
-            if _global_browser_driver:
-                try:
-                    _global_browser_driver.quit()
-                except:
-                    pass
-                _global_browser_driver = None
+        else:
+            # 如果浏览器已打开但不在正确的URL，导航到正确页面
+            try:
+                current_url = driver.current_url
+                if current_url != url:
+                    print(f"[浏览器] 浏览器已打开，正在导航到: {url}")
+                    driver.get(url)
+                else:
+                    print(f"✓ 浏览器已打开并位于: {url}")
+            except Exception as e:
+                print(f"⚠ 访问页面失败: {e}")
+                # 尝试重新创建浏览器实例
+                _create_browser_instance()
     
     # 打印启动信息
     print("=" * 60)
     print("🚀 网点路线优化系统正在启动...")
-    print(f"📍 访问地址: http://{HOST}:{PORT}")
+    print(f"📍 访问地址: http://{HOST}:{actual_port}")
     print(f"🔑 API密钥: {'已配置' if BAIDU_WEB_AK else '未配置'}")
     print(f"🐛 调试模式: {'开启' if DEBUG_MODE else '关闭'}")
     print("=" * 60)
@@ -620,10 +928,10 @@ if __name__ == "__main__":
         # 如果是reloader子进程，不打开浏览器
         
         # 禁用reloader以避免重复打开浏览器，但保留debug功能
-        app.run(host=HOST, port=PORT, debug=DEBUG_MODE, use_reloader=False)
+        app.run(host=HOST, port=actual_port, debug=DEBUG_MODE, use_reloader=False)
     except OSError as e:
         if "Address already in use" in str(e) or "address is already in use" in str(e).lower():
-            print(f"\n❌ 错误：端口 {PORT} 已被占用")
+            print(f"\n❌ 错误：端口 {actual_port} 已被占用")
             print(f"   请关闭占用该端口的程序，或修改 PORT 配置")
         else:
             print(f"\n❌ 启动失败: {e}")

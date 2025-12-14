@@ -65,16 +65,48 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
             print(f"[截图] ❌ {error_msg}")
             raise Exception(error_msg)
         
-        # 检查浏览器实例是否仍然有效
+        # 检查浏览器实例是否仍然有效（包括窗口是否打开）
         try:
+            # 首先检查窗口句柄是否存在（如果窗口被关闭，这个会失败）
+            window_handles = driver_instance.window_handles
+            if not window_handles:
+                raise Exception("浏览器窗口已被关闭（没有活动窗口）")
+            
+            # 切换到第一个窗口（确保有活动窗口）
+            driver_instance.switch_to.window(window_handles[0])
+            
             # 尝试获取当前URL来验证浏览器是否仍然有效
             current_url = driver_instance.current_url
             print(f"[截图] ✓ 使用 app.py 中已打开的浏览器实例")
             print(f"[截图]   当前浏览器URL: {current_url}")
+            print(f"[截图]   活动窗口数量: {len(window_handles)}")
+            
+            # 检查页面是否已经加载了应用（通过检查关键元素）
+            # 如果页面已经加载，就不刷新，避免丢失已渲染的内容（如路线连线等）
+            try:
+                # 检查控制面板是否存在（说明应用已加载）
+                from selenium.webdriver.common.by import By
+                control_panel = driver_instance.find_elements(By.ID, "control-panel")
+                # 如果当前URL包含目标URL的基础部分，且控制面板存在，说明页面已加载
+                if control_panel and (url in current_url or current_url.startswith(url.split('?')[0].split('#')[0])):
+                    print(f"[截图] ✓ 页面已加载应用，无需刷新（避免丢失已渲染内容）")
+                else:
+                    # 只有在页面确实不在应用页面时，才刷新
+                    print(f"[截图] 页面未加载应用，正在导航到: {url}")
+                    driver_instance.get(url)
+                    # 等待页面加载
+                    time.sleep(2)
+            except Exception as check_e:
+                # 如果检查失败，尝试导航到目标URL
+                print(f"[截图] 检查页面状态失败: {check_e}，尝试导航到: {url}")
+                driver_instance.get(url)
+                # 等待页面加载
+                time.sleep(2)
+            
             driver = driver_instance
             should_close_driver = False  # 不关闭外部传入的driver
         except Exception as e:
-            error_msg = f"浏览器实例无效（可能已被关闭）: {e}。请重新启动app.py。"
+            error_msg = f"浏览器实例无效（可能窗口已被关闭）: {e}。请重新启动app.py或确保浏览器窗口保持打开。"
             print(f"[截图] ❌ {error_msg}")
             raise Exception(error_msg)
         

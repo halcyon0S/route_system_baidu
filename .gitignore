@@ -37,6 +37,12 @@ instance/
 .webassets-cache
 
 # Excel files (optional - remove if you want to track them)
-*.xlsx
-*.xls
+# *.xlsx
+# *.xls
+# Keep template file
+!地点模板.xlsx
+
+# Screenshots
+网点图/*.png
+test_screenshot.png
 
