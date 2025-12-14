@@ -51,6 +51,10 @@ DIRECTIONLITE_URL = "https://api.map.baidu.com/directionlite/v1/driving"
 
 # API请求超时时间（秒）
 API_TIMEOUT = 20
+# API请求重试次数
+API_RETRY_COUNT = 3
+# API请求重试延迟（秒）
+API_RETRY_DELAY = 1
 
 # ==================== Flask应用初始化 ====================
 app = Flask(__name__)
@@ -236,18 +240,27 @@ def _create_browser_instance():
         return None
 
 
-def _check_browser_instance():
+def _check_browser_instance(create_if_missing: bool = True):
     """
     检查浏览器实例是否有效
-    如果无效，尝试重新创建
+    如果无效，尝试重新创建（仅在需要时）
+    
+    Args:
+        create_if_missing: 如果浏览器实例不存在，是否创建新实例（默认True）
+                          设置为False时，如果实例不存在或无效，返回None而不创建新窗口
+    
     返回: 有效的浏览器实例，如果失败返回None
     """
     global _global_browser_driver
     
-    # 如果浏览器实例不存在，创建新的
+    # 如果浏览器实例不存在
     if _global_browser_driver is None:
-        print("[浏览器检查] 浏览器实例不存在，正在创建...")
-        return _create_browser_instance()
+        if create_if_missing:
+            print("[浏览器检查] 浏览器实例不存在，正在创建...")
+            return _create_browser_instance()
+        else:
+            # 不创建新窗口，直接返回None
+            return None
     
     # 检查浏览器实例是否有效（包括窗口是否仍然打开）
     try:
@@ -291,11 +304,32 @@ def _check_browser_instance():
         return _global_browser_driver
     except Exception as e:
         print(f"[浏览器检查] ⚠️ 浏览器实例无效: {e}")
-        print("[浏览器检查] 正在重新创建浏览器实例...")
         # 清空无效的实例
         with _browser_lock:
             _global_browser_driver = None
-        return _create_browser_instance()
+        
+        # 判断错误类型：如果是窗口被关闭，不创建新窗口；如果是其他错误，可以创建
+        error_str = str(e).lower()
+        is_window_closed = any(keyword in error_str for keyword in [
+            "窗口已被关闭",
+            "no such window",
+            "window not found",
+            "target window",
+            "no window",
+            "invalid session"
+        ])
+        
+        if is_window_closed:
+            # 窗口被关闭，不创建新窗口（用户可能手动关闭了）
+            print("[浏览器检查] ⚠️ 浏览器窗口已被关闭，不自动创建新窗口")
+            return None
+        elif create_if_missing:
+            # 其他错误且允许创建，尝试重新创建
+            print("[浏览器检查] 正在重新创建浏览器实例...")
+            return _create_browser_instance()
+        else:
+            # 不允许创建，返回None
+            return None
 
 
 def _safe_float(x) -> float:
@@ -345,7 +379,7 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
 
 def _call_driving_leg(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[List[List[float]], int, int]:
     """
-    调用百度地图API获取两点之间的驾车路线
+    调用百度地图API获取两点之间的驾车路线（带重试机制）
     
     Args:
         a: 起点，包含 lng, lat 字段
@@ -358,7 +392,7 @@ def _call_driving_leg(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[List[List[f
         - duration: 时间（秒）
     
     Raises:
-        RuntimeError: API调用失败或返回错误
+        RuntimeError: API调用失败或返回错误（重试后仍失败）
     """
     _require_ak()
 
@@ -373,26 +407,112 @@ def _call_driving_leg(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[List[List[f
         "tactics": 0,  # 0=不走高速，1=最短时间，2=最短距离
     }
     
-    try:
-        resp = requests.get(DIRECTIONLITE_URL, params=params, timeout=API_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-    except requests.exceptions.RequestException as e:
-        raise RuntimeError(f"百度地图API请求失败: {str(e)}")
-    except ValueError as e:
-        raise RuntimeError(f"百度地图API响应解析失败: {str(e)}")
-
-    if data.get("status") != 0:
-        error_msg = data.get("message", "未知错误")
-        raise RuntimeError(f"百度路线规划失败：status={data.get('status')}, message={error_msg}")
-
-    # 检查返回数据格式
-    if "result" not in data or "routes" not in data["result"] or not data["result"]["routes"]:
-        raise RuntimeError("百度地图API返回数据格式错误：缺少路线信息")
-
-    route = data["result"]["routes"][0]
-    dist = int(route.get("distance", 0))
-    dur = int(route.get("duration", 0))
+    last_exception = None
+    
+    # 重试机制
+    for attempt in range(API_RETRY_COUNT):
+        try:
+            resp = requests.get(DIRECTIONLITE_URL, params=params, timeout=API_TIMEOUT)
+            resp.raise_for_status()
+            data = resp.json()
+            
+            # 检查API返回状态
+            if data.get("status") != 0:
+                error_msg = data.get("message", "未知错误")
+                status_code = data.get("status")
+                
+                # 某些错误不应该重试（如参数错误、权限错误等）
+                if status_code in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]:
+                    # 这些是业务逻辑错误，不需要重试
+                    raise RuntimeError(f"百度路线规划失败：status={status_code}, message={error_msg}")
+                
+                # 其他错误（如服务器错误、限流等）可以重试
+                last_exception = RuntimeError(f"百度路线规划失败：status={status_code}, message={error_msg}")
+                if attempt < API_RETRY_COUNT - 1:
+                    print(f"[API重试] 第 {attempt + 1} 次请求失败（status={status_code}），{API_RETRY_DELAY}秒后重试...")
+                    time.sleep(API_RETRY_DELAY)
+                    continue
+                else:
+                    raise last_exception
+            
+            # 检查返回数据格式
+            if "result" not in data or "routes" not in data["result"] or not data["result"]["routes"]:
+                last_exception = RuntimeError("百度地图API返回数据格式错误：缺少路线信息")
+                if attempt < API_RETRY_COUNT - 1:
+                    print(f"[API重试] 第 {attempt + 1} 次请求返回数据格式错误，{API_RETRY_DELAY}秒后重试...")
+                    time.sleep(API_RETRY_DELAY)
+                    continue
+                else:
+                    raise last_exception
+            
+            # 请求成功，解析数据
+            route = data["result"]["routes"][0]
+            dist = int(route.get("distance", 0))
+            dur = int(route.get("duration", 0))
+            
+            # 如果之前有重试，打印成功信息
+            if attempt > 0:
+                print(f"[API重试] 第 {attempt + 1} 次请求成功")
+            
+            # 解析路线点
+            poly = []
+            for st in route.get("steps", []) or []:
+                path = st.get("path", "")
+                if not path:
+                    continue
+                # path格式: "lng,lat;lng,lat;..."
+                for pair in path.split(";"):
+                    if not pair or "," not in pair:
+                        continue
+                    try:
+                        lng_s, lat_s = pair.split(",", 1)
+                        poly.append([float(lng_s), float(lat_s)])
+                    except ValueError:
+                        continue  # 跳过无效的坐标点
+            
+            return poly, dist, dur
+            
+        except requests.exceptions.Timeout as e:
+            last_exception = RuntimeError(f"百度地图API请求超时: {str(e)}")
+            if attempt < API_RETRY_COUNT - 1:
+                print(f"[API重试] 第 {attempt + 1} 次请求超时，{API_RETRY_DELAY}秒后重试...")
+                time.sleep(API_RETRY_DELAY)
+                continue
+            else:
+                raise last_exception
+                
+        except requests.exceptions.ConnectionError as e:
+            last_exception = RuntimeError(f"百度地图API连接失败: {str(e)}")
+            if attempt < API_RETRY_COUNT - 1:
+                print(f"[API重试] 第 {attempt + 1} 次请求连接失败，{API_RETRY_DELAY}秒后重试...")
+                time.sleep(API_RETRY_DELAY)
+                continue
+            else:
+                raise last_exception
+                
+        except requests.exceptions.RequestException as e:
+            last_exception = RuntimeError(f"百度地图API请求失败: {str(e)}")
+            if attempt < API_RETRY_COUNT - 1:
+                print(f"[API重试] 第 {attempt + 1} 次请求失败，{API_RETRY_DELAY}秒后重试...")
+                time.sleep(API_RETRY_DELAY)
+                continue
+            else:
+                raise last_exception
+                
+        except ValueError as e:
+            last_exception = RuntimeError(f"百度地图API响应解析失败: {str(e)}")
+            if attempt < API_RETRY_COUNT - 1:
+                print(f"[API重试] 第 {attempt + 1} 次响应解析失败，{API_RETRY_DELAY}秒后重试...")
+                time.sleep(API_RETRY_DELAY)
+                continue
+            else:
+                raise last_exception
+    
+    # 所有重试都失败
+    if last_exception:
+        raise last_exception
+    else:
+        raise RuntimeError("百度地图API请求失败：未知错误")
 
     # 解析路线点
     poly = []
@@ -740,11 +860,13 @@ def capture_screenshot_endpoint():
         base_dir = _get_base_dir()
         save_dir = os.path.join(base_dir, "网点图")
         
-        # 检查并确保浏览器实例有效（如果失效会自动重新创建）
-        driver_instance = _check_browser_instance()
+        # 检查浏览器实例
+        # 如果浏览器实例不存在，尝试创建（正常启动场景）
+        # 如果浏览器实例存在但窗口被关闭，不创建新窗口（用户手动关闭的场景）
+        driver_instance = _check_browser_instance(create_if_missing=True)
         
         if driver_instance is None:
-            error_msg = "无法创建浏览器实例。请确保已安装selenium和Edge浏览器，并检查EdgeDriver是否正确安装。"
+            error_msg = "无法创建或访问浏览器实例。请确保：\n1. app.py已启动\n2. Edge浏览器和EdgeDriver已正确安装\n3. 如果浏览器窗口被关闭，请重新启动app.py"
             print(f"[截图API] ❌ {error_msg}")
             return jsonify({"error": error_msg}), 500
         
@@ -752,10 +874,9 @@ def capture_screenshot_endpoint():
         try:
             window_handles = driver_instance.window_handles
             if not window_handles:
-                print("[截图API] ⚠️ 检测到浏览器窗口已关闭，正在重新创建...")
-                driver_instance = _create_browser_instance()
-                if driver_instance is None:
-                    return jsonify({"error": "浏览器窗口已关闭且无法重新创建，请重新启动程序"}), 500
+                error_msg = "浏览器窗口已关闭。请确保浏览器窗口保持打开状态，或重新启动app.py。"
+                print(f"[截图API] ❌ {error_msg}")
+                return jsonify({"error": error_msg}), 500
             else:
                 # 确保切换到活动窗口
                 driver_instance.switch_to.window(window_handles[0])
@@ -782,10 +903,9 @@ def capture_screenshot_endpoint():
                     driver_instance.get(url)
                     time.sleep(1)
         except Exception as e:
-            print(f"[截图API] ⚠️ 检查浏览器窗口时出错: {e}，尝试重新创建...")
-            driver_instance = _create_browser_instance()
-            if driver_instance is None:
-                return jsonify({"error": f"浏览器检查失败且无法重新创建: {str(e)}"}), 500
+            error_msg = f"检查浏览器窗口时出错: {str(e)}。请确保浏览器窗口保持打开状态。"
+            print(f"[截图API] ❌ {error_msg}")
+            return jsonify({"error": error_msg}), 500
         
         print("[截图API] ✓ 使用浏览器实例进行截图")
         
@@ -793,50 +913,45 @@ def capture_screenshot_endpoint():
         group_name = data.get('group_name', '')
         
         # 执行截图（传递UI状态、浏览器实例和网组名称，等待3秒，确保页面和控制面板滚动完成）
-        # 如果截图失败且是因为浏览器实例失效，会尝试重新创建并重试一次
-        try:
-            filepath = capture_screenshot_sync(
-                url, 
-                save_dir=save_dir, 
-                wait_time=3, 
-                ui_state=ui_state,
-                driver_instance=driver_instance,
-                group_name=group_name
-            )
-        except Exception as e:
-            error_str = str(e).lower()
-            # 如果错误信息包含"invalid session id"、"浏览器实例无效"、"窗口已被关闭"等，尝试重新创建浏览器并重试
-            if any(keyword in error_str for keyword in [
-                "invalid session id", 
-                "浏览器实例无效", 
-                "浏览器会话", 
-                "窗口已被关闭",
-                "no such window",
-                "window not found",
-                "target window",
-                "no window"
-            ]):
-                print(f"[截图API] ⚠️ 检测到浏览器会话失效或窗口关闭: {str(e)}")
-                print("[截图API] 正在重新创建浏览器实例并重试...")
-                driver_instance = _create_browser_instance()
-                if driver_instance is None:
-                    return jsonify({"error": "浏览器实例失效且无法重新创建，请重新启动程序"}), 500
-                # 重试截图
-                try:
-                    filepath = capture_screenshot_sync(
-                        url, 
-                        save_dir=save_dir, 
-                        wait_time=3, 
-                        ui_state=ui_state,
-                        driver_instance=driver_instance,
-                        group_name=group_name
-                    )
-                except Exception as retry_e:
-                    # 重试也失败，返回错误
-                    return jsonify({"error": f"截图失败（重试后仍失败）: {str(retry_e)}"}), 500
-            else:
-                # 其他错误直接抛出
-                raise
+        # 如果截图失败，会尝试多次重试（最多3次）
+        max_retries = 3
+        retry_delay = 2  # 重试延迟（秒）
+        filepath = None
+        last_error = None
+        
+        for retry_count in range(max_retries):
+            try:
+                filepath = capture_screenshot_sync(
+                    url, 
+                    save_dir=save_dir, 
+                    wait_time=3, 
+                    ui_state=ui_state,
+                    driver_instance=driver_instance,
+                    group_name=group_name
+                )
+                # 截图成功，跳出重试循环
+                if retry_count > 0:
+                    print(f"[截图API] ✓ 第 {retry_count + 1} 次尝试成功")
+                break
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                
+                # 如果是最后一次重试，直接抛出错误
+                if retry_count == max_retries - 1:
+                    print(f"[截图API] ❌ 截图失败（已重试 {max_retries} 次）: {str(e)}")
+                    break
+                
+                # 不重新创建浏览器，只重试（使用已打开的浏览器）
+                print(f"[截图API] ⚠️ 第 {retry_count + 1} 次尝试失败: {str(e)}")
+                print(f"[截图API] {retry_delay}秒后重试...")
+                
+                # 等待后重试
+                time.sleep(retry_delay)
+        
+        # 如果所有重试都失败
+        if filepath is None:
+            return jsonify({"error": f"截图失败（已重试 {max_retries} 次）: {str(last_error)}"}), 500
         
         # 返回相对路径（基于base_dir）
         rel_path = os.path.relpath(filepath, base_dir)

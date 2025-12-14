@@ -152,6 +152,7 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
         try:
             show_farthest = ui_state.get('showFarthestLine', True)
             show_distance_labels = ui_state.get('showDistanceLabels', True)
+            show_route_simple = ui_state.get('showRouteSimple', False)
             
             apply_ui_state_script = f"""
             (function() {{
@@ -182,6 +183,19 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
                         }}
                     }}
                     
+                    // 设置路线简版开关
+                    const routeSimpleCheckbox = document.getElementById('toggleRouteSimple');
+                    if (routeSimpleCheckbox) {{
+                        routeSimpleCheckbox.checked = {str(show_route_simple).lower()};
+                        // 创建并触发change事件
+                        const changeEvent3 = new Event('change', {{ bubbles: true }});
+                        routeSimpleCheckbox.dispatchEvent(changeEvent3);
+                        // 如果toggleRouteSimple函数存在，也调用它（双重保险）
+                        if (typeof window.toggleRouteSimple === 'function') {{
+                            window.toggleRouteSimple();
+                        }}
+                    }}
+                    
                     return true;
                 }} catch(e) {{
                     console.error('应用UI状态时出错:', e);
@@ -191,7 +205,7 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
             """
             result = driver.execute_script(apply_ui_state_script)
             if result:
-                print(f"[截图] ✓ UI状态已同步 (最远直线: {show_farthest}, 距离标签: {show_distance_labels})")
+                print(f"[截图] ✓ UI状态已同步 (最远直线: {show_farthest}, 距离标签: {show_distance_labels}, 路线简版: {show_route_simple})")
             else:
                 print(f"[截图] ⚠️ UI状态同步可能失败，继续截图...")
             

@@ -63,6 +63,75 @@
       font-weight: bold; font-size: 16px;
       border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
     }
+
+    /* 自定义模态对话框样式 */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    }
+
+    .modal-dialog {
+      background: white;
+      border-radius: 12px;
+      padding: 30px 40px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      min-width: 320px;
+      text-align: center;
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: bold;
+      color: #333;
+      margin-bottom: 25px;
+    }
+
+    .modal-buttons {
+      display: flex;
+      gap: 15px;
+      justify-content: center;
+    }
+
+    .modal-btn {
+      padding: 12px 30px;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.3s;
+      min-width: 120px;
+    }
+
+    .modal-btn-detail {
+      background: #F44336;
+      color: white;
+    }
+
+    .modal-btn-detail:hover {
+      background: #D32F2F;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(244, 67, 54, 0.4);
+    }
+
+    .modal-btn-simple {
+      background: #4CAF50;
+      color: white;
+    }
+
+    .modal-btn-simple:hover {
+      background: #388E3C;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
+    }
   </style>
 </head>
 
@@ -145,6 +214,14 @@
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#555;font-weight:normal;">
         <input type="checkbox" id="toggleDistanceLabels" checked onchange="toggleDistanceLabels()">
         显示路线距离标签（黄色）
+      </label>
+    </div>
+
+    <!-- ✅ 路线简版开关 -->
+    <div style="margin-top:8px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#555;font-weight:normal;">
+        <input type="checkbox" id="toggleRouteSimple" onchange="toggleRouteSimple()">
+        路线简版
       </label>
     </div>
 
@@ -275,6 +352,109 @@
           }
         }
       });
+    }
+
+    // 路线简版开关状态
+    let routeSimpleMode = false;
+    // 保存当前路线结果
+    let currentRouteResult = null;
+
+    function toggleRouteSimple() {
+      routeSimpleMode = document.getElementById('toggleRouteSimple')?.checked ?? false;
+      console.log('切换路线简版状态:', routeSimpleMode);
+      
+      // 如果当前有路线数据，重新渲染路线详情
+      if (currentRouteResult) {
+        updateRouteInfo(currentRouteResult, routeSimpleMode);
+      }
+    }
+
+    // 更新路线详情显示
+    function updateRouteInfo(result, simpleMode = false) {
+      const { route, legs, total_distance, total_duration, farthest_points } = result;
+      const routeInfoDiv = document.getElementById('route-info');
+      
+      if (!routeInfoDiv) return;
+      
+      let html = '';
+      
+      if (simpleMode) {
+        // 简版：只显示序号和网点名称，竖向排序，采用地图标记名称样式
+        html = '<h3 style="color:#3366FF;margin-bottom:15px;">🗺️ 路线详情（简版）</h3>';
+        html += '<div style="line-height:1.8;margin-bottom:15px;">';
+        route.forEach((loc, i) => {
+          // 使用地图标记名称的样式：白色背景、蓝色边框、阴影等
+          html += `<div style="padding:3px 0;display:flex;align-items:center;">
+            <span style="
+              background: white;
+              border: 2px solid #2196F3;
+              padding: 5px 10px;
+              border-radius: 5px;
+              font-size: 13px;
+              font-weight: bold;
+              box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+              white-space: nowrap;
+              color: #333;
+            ">${i + 1}. ${loc.name}</span>
+          </div>`;
+        });
+        html += '</div>';
+        
+        // 总网点数信息
+        html += `
+          <div style="margin-top:15px;padding:12px;background:#E3F2FD;border-radius:6px;font-weight:bold;border-left:4px solid #2196F3;">
+            <div style="color:#1976D2;font-size:15px;">📊 总网点数：<span style="color:#FF5722;font-size:16px;">${route.length} 个</span></div>
+            <div style="color:#FF5722;font-size:15px;margin-top:8px;">
+              总距离：${formatMeters(total_distance)} · 总用时：${formatSeconds(total_duration)}
+            </div>
+          </div>`;
+
+        // 最远网点信息
+        if (farthest_points && farthest_points.point1 && farthest_points.point2) {
+          html += `
+            <div style="margin-top:15px;padding:12px;background:#E8F5E9;border-radius:6px;border-left:4px solid #4CAF50;">
+              <div style="color:#2E7D32;font-weight:bold;margin-bottom:8px;font-size:14px;">📏 最远网点（直线距离）</div>
+              <div style="color:#388E3C;font-size:15px;margin-bottom:5px;">
+                <strong>${farthest_points.point1.name}</strong> ↔ <strong>${farthest_points.point2.name}</strong>
+              </div>
+              <div style="color:#4CAF50;font-size:16px;font-weight:bold;margin-top:5px;">
+                ${farthest_points.straight_distance_text}
+              </div>
+            </div>`;
+        }
+      } else {
+        // 完整版：显示详细路线信息
+        html = '<h3 style="color:#3366FF;margin-bottom:10px;">🗺️ 路线详情</h3>';
+        (legs || []).forEach((lg, i) => {
+          html += `
+            <div class="route-item">
+              <strong>${i + 1}. ${lg.from}</strong> → <strong>${i + 2}. ${lg.to}</strong>
+              <div class="distance-info">${lg.distance_text} · ${lg.duration_text}</div>
+            </div>`;
+        });
+        html += `
+          <div style="margin-top:15px;padding:10px;background:#E3F2FD;border-radius:5px;font-weight:bold;">
+            <div style="color:#1976D2;">总网点数：${route.length} 个</div>
+            <div style="color:#FF5722;font-size:16px;margin-top:5px;">
+              总距离：${formatMeters(total_distance)} · 总用时：${formatSeconds(total_duration)}
+            </div>
+          </div>`;
+
+        if (farthest_points && farthest_points.point1 && farthest_points.point2) {
+          html += `
+            <div style="margin-top:15px;padding:10px;background:#E8F5E9;border-radius:5px;border-left:4px solid #00FF00;">
+              <div style="color:#2E7D32;font-weight:bold;margin-bottom:5px;">📏 最远网点（直线距离）</div>
+              <div style="color:#388E3C;font-size:13px;">
+                <strong>${farthest_points.point1.name}</strong> ↔ <strong>${farthest_points.point2.name}</strong>
+              </div>
+              <div style="color:#00FF00;font-size:14px;font-weight:bold;margin-top:5px;">
+                ${farthest_points.straight_distance_text}
+              </div>
+            </div>`;
+        }
+      }
+      
+      routeInfoDiv.innerHTML = html;
     }
 
     function drawFarthestLine(farthest_points) {
@@ -450,6 +630,51 @@
       // 不清除状态栏，只重置为"就绪"状态
       updateStatus('就绪', 'ready');
     }
+
+    // 显示截图模式选择对话框
+    function showScreenshotModeDialog(callback) {
+      // 创建遮罩层
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      
+      // 创建对话框
+      const dialog = document.createElement('div');
+      dialog.className = 'modal-dialog';
+      dialog.innerHTML = `
+        <div class="modal-title">📸 选择截图模式</div>
+        <div class="modal-buttons">
+          <button class="modal-btn modal-btn-detail" onclick="closeScreenshotDialog(false)">详细版</button>
+          <button class="modal-btn modal-btn-simple" onclick="closeScreenshotDialog(true)">简洁版</button>
+        </div>
+      `;
+      
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+      
+      // 保存回调函数到全局，供按钮调用
+      window._screenshotModeCallback = callback;
+      
+      // 点击遮罩层关闭
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          closeScreenshotDialog(false); // 默认选择详细版
+        }
+      });
+    }
+
+    // 关闭截图模式对话框
+    function closeScreenshotDialog(useSimpleMode) {
+      const overlay = document.querySelector('.modal-overlay');
+      if (overlay) {
+        overlay.remove();
+      }
+      
+      // 调用回调函数
+      if (window._screenshotModeCallback) {
+        window._screenshotModeCallback(useSimpleMode);
+        window._screenshotModeCallback = null;
+      }
+    }
     
     // 显示批量处理进度
     function showBatchProgress(totalGroups) {
@@ -558,15 +783,40 @@
         currentLocations = data.locations || [];
         excelGroups = data.groups || {};
         
-        let infoHtml = `<div style="padding:10px;background:#4CAF50;color:white;border-radius:5px;">
-          ✅ 成功导入 ${currentLocations.length} 个网点`;
+        // 美化成功导入的弹窗格式
+        let infoHtml = `<div style="
+          padding: 16px 20px;
+          background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+          color: white;
+          border-radius: 8px;
+          box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+          border-left: 4px solid #2E7D32;
+        ">
+          <div style="font-size: 18px; font-weight: bold; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 24px;">✅</span>
+            <span>成功导入 ${currentLocations.length} 个网点</span>
+          </div>`;
         
         if (data.group_count > 0) {
-          infoHtml += `<br>📦 共 ${data.group_count} 个网组`;
-          // 显示分组信息
-          const groupList = Object.keys(excelGroups).map(g => `${g}(${excelGroups[g].length}个网点)`).join(', ');
-          infoHtml += `<br><small>${groupList}</small>`;
-          infoHtml += `<br><small>正在按网组依次处理...</small>`;
+          infoHtml += `
+          <div style="
+            margin-top: 12px;
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 6px;
+            backdrop-filter: blur(10px);
+          ">
+            <div style="font-size: 15px; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+              <span>📦</span>
+              <span>共 ${data.group_count} 个网组</span>
+            </div>
+            <div style="font-size: 13px; line-height: 1.6; opacity: 0.95;">
+              ${Object.keys(excelGroups).map(g => `<span style="display: inline-block; margin: 2px 4px; padding: 4px 8px; background: rgba(255, 255, 255, 0.2); border-radius: 4px;">${g} (${excelGroups[g].length}个网点)</span>`).join('')}
+            </div>
+            <div style="margin-top: 10px; font-size: 13px; font-style: italic; opacity: 0.9;">
+              ⏳ 正在按网组依次处理...
+            </div>
+          </div>`;
         }
         
         infoHtml += `</div>`;
@@ -577,10 +827,25 @@
             currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || "", l.group || ""].filter(x => x !== "").join(',')).join('\n');
         }
 
-        // 如果有分组数据，自动按网组依次处理
+        // 如果有分组数据，显示自定义对话框选择截图模式
         if (data.group_count > 0) {
-          // 自动开始批量处理
-          startBatchProcess();
+          // 创建自定义模态对话框
+          showScreenshotModeDialog((useSimpleMode) => {
+            // 设置路线简版开关状态
+            const routeSimpleCheckbox = document.getElementById('toggleRouteSimple');
+            if (routeSimpleCheckbox) {
+              routeSimpleCheckbox.checked = useSimpleMode;
+              // 触发change事件，确保状态同步
+              if (typeof toggleRouteSimple === 'function') {
+                toggleRouteSimple();
+              }
+            }
+            
+            // 延迟一下再开始批量处理，确保UI状态已更新
+            setTimeout(() => {
+              startBatchProcess();
+            }, 300);
+          });
         } else {
           // 没有分组，直接绘制所有点
         drawPoints(currentLocations);
@@ -1003,37 +1268,14 @@
         });
       }, 200);
 
-      // 左侧面板
-      let html = '<h3 style="color:#3366FF;margin-bottom:10px;">🗺️ 路线详情</h3>';
-      (legs || []).forEach((lg, i) => {
-        html += `
-          <div class="route-item">
-            <strong>${i + 1}. ${lg.from}</strong> → <strong>${i + 2}. ${lg.to}</strong>
-            <div class="distance-info">${lg.distance_text} · ${lg.duration_text}</div>
-          </div>`;
-      });
-      html += `
-        <div style="margin-top:15px;padding:10px;background:#E3F2FD;border-radius:5px;font-weight:bold;">
-          <div style="color:#1976D2;">总网点数：${route.length} 个</div>
-          <div style="color:#FF5722;font-size:16px;margin-top:5px;">
-            总距离：${formatMeters(total_distance)} · 总用时：${formatSeconds(total_duration)}
-          </div>
-        </div>`;
-
-      if (farthest_points && farthest_points.point1 && farthest_points.point2) {
-        html += `
-          <div style="margin-top:15px;padding:10px;background:#E8F5E9;border-radius:5px;border-left:4px solid #00FF00;">
-            <div style="color:#2E7D32;font-weight:bold;margin-bottom:5px;">📏 最远网点（直线距离）</div>
-            <div style="color:#388E3C;font-size:13px;">
-              <strong>${farthest_points.point1.name}</strong> ↔ <strong>${farthest_points.point2.name}</strong>
-            </div>
-            <div style="color:#00FF00;font-size:14px;font-weight:bold;margin-top:5px;">
-              ${farthest_points.straight_distance_text}
-            </div>
-          </div>`;
-      }
-
-      document.getElementById('route-info').innerHTML = html;
+      // 保存当前路线结果
+      currentRouteResult = result;
+      
+      // 获取当前简版模式状态
+      routeSimpleMode = document.getElementById('toggleRouteSimple')?.checked ?? false;
+      
+      // 更新路线详情显示
+      updateRouteInfo(result, routeSimpleMode);
       
       // 自动滚动控制面板到底部
       setTimeout(() => {
@@ -1168,7 +1410,8 @@
       // 获取当前的UI状态（复选框状态）
       const uiState = {
         showFarthestLine: document.getElementById('toggleFarthest')?.checked ?? true,
-        showDistanceLabels: document.getElementById('toggleDistanceLabels')?.checked ?? true
+        showDistanceLabels: document.getElementById('toggleDistanceLabels')?.checked ?? true,
+        showRouteSimple: document.getElementById('toggleRouteSimple')?.checked ?? false
       };
       
       // 显示截图提示在状态区域（不影响路线详情页）
