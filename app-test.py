@@ -35,7 +35,7 @@ except ImportError:
 # ==================== 配置常量 ====================
 # 服务器配置
 HOST = "127.0.0.1"
-PORT = 5006
+PORT = 5005
 DEBUG_MODE = True
 
 # 实际使用的端口（可能在启动时自动调整）
@@ -344,10 +344,10 @@ def _safe_float(x) -> float:
 def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
     """
     读取Excel文件，解析网点数据
-    支持列：经度、纬度、网点名称、备注(可选)、网组(可选)、工号(可选)、姓名(可选)、县区(可选)、调整(可选)
+    支持列：经度、纬度、网点名称、备注(可选)、网组(可选)、工号(可选)、姓名(可选)
     
     Returns:
-        网点列表，每个网点包含：lng, lat, name, remark, group, employee_id, employee_name, district, adjustment
+        网点列表，每个网点包含：lng, lat, name, remark, group, employee_id, employee_name
     """
     df = pd.read_excel(file_stream)
 
@@ -357,7 +357,7 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
     cols = set(df.columns.astype(str))
     missing = needed - cols
     if missing:
-        raise ValueError(f"Excel缺少列：{', '.join(missing)}。需要：经度、纬度、网点名称；备注、网组、工号、姓名、县区、调整可选。")
+        raise ValueError(f"Excel缺少列：{', '.join(missing)}。需要：经度、纬度、网点名称；备注、网组、工号、姓名可选。")
 
     if "备注" not in df.columns:
         df["备注"] = ""
@@ -367,10 +367,6 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
         df["工号"] = ""
     if "姓名" not in df.columns:
         df["姓名"] = ""
-    if "县区" not in df.columns:
-        df["县区"] = ""
-    if "调整" not in df.columns:
-        df["调整"] = ""
 
     locations = []
     for _, r in df.iterrows():
@@ -381,8 +377,6 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
         group = "" if pd.isna(r["网组"]) else str(r["网组"]).strip()
         employee_id = "" if pd.isna(r["工号"]) else str(r["工号"]).strip()
         employee_name = "" if pd.isna(r["姓名"]) else str(r["姓名"]).strip()
-        district = "" if pd.isna(r["县区"]) else str(r["县区"]).strip()
-        adjustment = "" if pd.isna(r["调整"]) else str(r["调整"]).strip()
         if not name:
             continue
         if math.isnan(lng) or math.isnan(lat):
@@ -394,9 +388,7 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
             "remark": remark, 
             "group": group,
             "employee_id": employee_id,
-            "employee_name": employee_name,
-            "district": district,
-            "adjustment": adjustment
+            "employee_name": employee_name
         })
     return locations
 
@@ -706,30 +698,6 @@ def home():
     return render_template("index.html")
 
 
-@app.get("/config-custom.js")
-def get_custom_config():
-    """
-    提供config-custom.js配置文件
-    优先从exe同目录或脚本目录读取config-custom.js，如果不存在则返回404
-    """
-    base_dir = _get_base_dir()
-    config_path = os.path.join(base_dir, "config-custom.js")
-    
-    if os.path.exists(config_path):
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-            from flask import Response
-            return Response(content, mimetype='application/javascript')
-        except Exception as e:
-            print(f"[配置] 读取config-custom.js失败: {e}")
-            return jsonify({"error": "读取配置文件失败"}), 500
-    else:
-        # 如果config-custom.js不存在，返回404，前端会fallback到static/config.js
-        from flask import abort
-        abort(404)
-
-
 @app.post("/upload_excel")
 def upload_excel():
     """
@@ -752,52 +720,21 @@ def upload_excel():
         if not locs:
             return jsonify({"error": "未解析到有效网点数据（请检查经纬度、名称列）"}), 400
 
-        # 首先按"调整"字段分组，然后在同字段下再按工号、网组分组
-        # 结构：adjustments -> employee_id -> groups -> locations
-        adjustments = {}
-        for loc in locs:
-            adjustment = loc.get("adjustment", "").strip()
-            if not adjustment:
-                adjustment = "未分类"  # 如果没有调整字段，归为"未分类"
-            
-            if adjustment not in adjustments:
-                adjustments[adjustment] = {}
-            
-            employee_id = loc.get("employee_id", "").strip()
-            if not employee_id:
-                employee_id = "未分组"  # 如果没有工号，归为"未分组"
-            
-            if employee_id not in adjustments[adjustment]:
-                adjustments[adjustment][employee_id] = {
-                    "employee_id": employee_id,
-                    "employee_name": loc.get("employee_name", "").strip(),
-                    "groups": {}
-                }
-            
-            group = loc.get("group", "").strip()
-            if not group:
-                group = "未分组"  # 如果没有网组，归为"未分组"
-            
-            if group not in adjustments[adjustment][employee_id]["groups"]:
-                adjustments[adjustment][employee_id]["groups"][group] = []
-            
-            adjustments[adjustment][employee_id]["groups"][group].append(loc)
-        
-        # 保持向后兼容：按网组分组（用于旧版功能）
+        # 按网组分组
         groups = {}
         for loc in locs:
             group = loc.get("group", "").strip()
             if not group:
-                group = "未分组"
+                group = "未分组"  # 如果没有网组，归为"未分组"
             if group not in groups:
                 groups[group] = []
             groups[group].append(loc)
         
-        # 保持向后兼容：按工号分组（用于旧版功能）
+        # 按工号分组（用于行政区图功能）
         employees = {}
         for loc in locs:
             employee_id = loc.get("employee_id", "").strip()
-            if employee_id:
+            if employee_id:  # 只有有工号的才分组
                 if employee_id not in employees:
                     employees[employee_id] = {
                         "employee_id": employee_id,
@@ -817,9 +754,7 @@ def upload_excel():
             "groups": groups,
             "group_count": len(groups),
             "employees": employees,
-            "employee_count": len(employees),
-            "adjustments": adjustments,  # 新增：按调整字段分组的数据
-            "adjustment_count": len(adjustments)
+            "employee_count": len(employees)
         })
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -954,11 +889,10 @@ def capture_screenshot_endpoint():
         data = request.get_json() or {}
         ui_state = data.get('ui_state', {})
         
-        # 获取网组名称、工号、姓名、调整（用于截图文件命名和路径）
+        # 获取网组名称、工号、姓名（用于截图文件命名和路径）
         group_name = data.get('group_name', '')
         employee_id = data.get('employee_id', '')
         employee_name = data.get('employee_name', '')
-        adjustment = data.get('adjustment', '')
         
         # 获取当前应用URL
         url = f"http://{HOST}:{_get_actual_port()}"
@@ -972,11 +906,6 @@ def capture_screenshot_endpoint():
             safe_employee_id = "".join(c for c in employee_id.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
             safe_employee_name = "".join(c for c in employee_name.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
             save_dir = os.path.join(base_save_dir, f"{safe_employee_id}-{safe_employee_name}")
-            
-            # 如果有调整字段，在工号-姓名目录下再创建调整字段子目录
-            if adjustment and adjustment.strip():
-                safe_adjustment = "".join(c for c in adjustment.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
-                save_dir = os.path.join(save_dir, safe_adjustment)
         else:
             save_dir = base_save_dir
         
@@ -1039,15 +968,14 @@ def capture_screenshot_endpoint():
         for retry_count in range(max_retries):
             try:
                 filepath = capture_screenshot_sync(
-                    url,
-                    save_dir=save_dir,
-                    wait_time=3,
+                    url, 
+                    save_dir=save_dir, 
+                    wait_time=3, 
                     ui_state=ui_state,
                     driver_instance=driver_instance,
                     group_name=group_name,
                     employee_id=employee_id,
-                    employee_name=employee_name,
-                    adjustment=adjustment
+                    employee_name=employee_name
                 )
                 # 截图成功，跳出重试循环
                 if retry_count > 0:

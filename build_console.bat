@@ -42,20 +42,47 @@ if errorlevel 1 (
 REM 清理临时文件
 if exist route_system_baidu_console.spec del /q route_system_baidu_console.spec
 
-REM 检查输出文件
-echo [3/3] 检查输出文件...
+REM 检查输出文件并重命名（添加时间戳）
+echo [3/3] 检查输出文件并添加时间戳...
 if exist "dist\route_system_baidu.exe" (
+    REM 使用PowerShell完成重命名，时间戳写入文件
+    powershell -NoProfile -Command "$ts = (Get-Date).ToString('yyyyMMddHHmm'); $oldFile = 'dist\route_system_baidu.exe'; $newFile = 'dist\route_system_' + $ts + '.exe'; if (Test-Path $oldFile) { if (Test-Path $newFile) { Remove-Item $newFile -Force }; Rename-Item $oldFile $newFile; Write-Host ('成功重命名为: route_system_' + $ts + '.exe'); [System.IO.File]::WriteAllText('timestamp_result.tmp', $ts, [System.Text.Encoding]::ASCII) } else { [System.IO.File]::WriteAllText('timestamp_result.tmp', '', [System.Text.Encoding]::ASCII); exit 1 }" 2>nul
+    set /p timestamp=<timestamp_result.tmp
+    del timestamp_result.tmp >nul 2>&1
+    
+    REM 检查重命名是否成功
+    if "%timestamp%"=="" (
+        echo [警告] 重命名可能失败，检查文件...
+        set newfilename=route_system_baidu.exe
+        set newfilepath=dist\%newfilename%
+    ) else (
+        REM 去除可能的换行符
+        set timestamp=%timestamp: =%
+        set newfilename=route_system_%timestamp%.exe
+        set newfilepath=dist\%newfilename%
+    )
+    
     echo.
     echo ========================================
     echo ✓ 打包成功！
     echo ========================================
     echo.
-    echo EXE 文件位置: dist\route_system_baidu.exe
+    echo EXE 文件位置: %newfilepath%
+    echo 原文件名: route_system_baidu.exe
+    if defined timestamp (
+        echo 新文件名: %newfilename%
+    ) else (
+        echo 文件名: %newfilename% (未添加时间戳)
+    )
     echo 注意：此版本会显示控制台窗口，方便查看日志
     echo.
-    dir "dist\route_system_baidu.exe" | findstr "route_system_baidu.exe"
+    if exist "%newfilepath%" (
+        dir "%newfilepath%" | findstr /i "%newfilename%"
+    ) else (
+        dir "dist\route_system_baidu.exe" | findstr /i "route_system_baidu"
+    )
     echo.
-    echo 提示：双击 dist\route_system_baidu.exe 即可运行
+    echo 提示：双击 %newfilepath% 即可运行
     echo.
 ) else (
     echo.

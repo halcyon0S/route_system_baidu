@@ -1,5 +1,26 @@
 # 打包为EXE文件说明
 
+## 配置文件说明
+
+### config-custom.js（优先使用）
+- 位置：打包后放在exe同目录内
+- 用途：自定义百度地图API密钥配置
+- 优先级：如果存在config-custom.js，优先使用该文件；如果不存在，则使用static/config.js
+- 格式：
+```javascript
+window.BMAP_CONFIG = {
+  jsAk: "您的百度地图JavaScript API Key",
+  webAk: "您的百度地图Web服务API Key"
+};
+```
+
+### static/config.js（默认配置）
+- 位置：打包时已包含在exe中
+- 用途：默认的百度地图API密钥配置
+- 优先级：仅在config-custom.js不存在时使用
+
+## 打包为EXE文件说明
+
 ## 方法一：使用批处理文件（推荐）
 
 ### 标准打包（平衡体积和兼容性）

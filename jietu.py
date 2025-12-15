@@ -18,7 +18,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
 
-def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "", employee_id: str = "", employee_name: str = "") -> str:
+def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "", employee_id: str = "", employee_name: str = "", adjustment: str = "") -> str:
     """
     使用Selenium + Edge浏览器截图页面viewport（可视区域）
     确保截取到控制面板滚动后的最新状态，并同步当前浏览器中的UI状态
@@ -45,6 +45,7 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
     os.makedirs(save_dir, exist_ok=True)
     
     # 生成文件名（按规则：工号-姓名-网组网点图-网组 或 工号-姓名-行政区图）
+    # 注意：调整字段不包含在文件名中，而是作为目录名
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # 判断是否为行政区图（group_name为空或特殊标记）
@@ -59,7 +60,7 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
         else:
             filename = f"行政区图_{timestamp}.png"
     else:
-        # 网组网点图命名：工号-姓名-网组网点图-网组
+        # 网组网点图命名：工号-姓名-网组网点图-网组（不包含调整字段）
         if employee_id and employee_id.strip() and employee_name and employee_name.strip():
             safe_employee_id = "".join(c for c in employee_id.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
             safe_employee_name = "".join(c for c in employee_name.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
@@ -304,7 +305,7 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
             print("[截图] 使用外部浏览器实例，不关闭浏览器")
 
 
-def capture_screenshot_sync(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "", employee_id: str = "", employee_name: str = "") -> str:
+def capture_screenshot_sync(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "", employee_id: str = "", employee_name: str = "", adjustment: str = "") -> str:
     """
     同步版本的截图函数（供Flask调用）
     注意：此函数已经是同步的，保留此函数以保持API兼容性
@@ -322,7 +323,7 @@ def capture_screenshot_sync(url: str, save_dir: str = "网点图", wait_time: in
     Returns:
         保存的文件路径
     """
-    return capture_screenshot(url, save_dir, wait_time, ui_state, driver_instance, group_name, employee_id, employee_name)
+    return capture_screenshot(url, save_dir, wait_time, ui_state, driver_instance, group_name, employee_id, employee_name, adjustment)
 
 
 if __name__ == "__main__":
