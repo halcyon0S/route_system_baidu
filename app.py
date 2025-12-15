@@ -13,6 +13,7 @@ import platform
 import socket
 import threading
 import time
+import tempfile
 from typing import List, Dict, Any, Tuple, Optional
 
 import pandas as pd
@@ -131,6 +132,7 @@ def _find_available_port(host: str, start_port: int, max_attempts: int = 10) -> 
 def _get_edge_binary_path():
     """
     根据操作系统获取 Edge 浏览器的可执行文件路径
+    支持多种检测方式，提高跨电脑兼容性
     
     Returns:
         Edge 浏览器路径，如果未找到返回 None
@@ -138,22 +140,66 @@ def _get_edge_binary_path():
     system = platform.system()
     
     if system == "Windows":
-        # Windows 系统下的 Edge 路径
+        # Windows 系统下的 Edge 路径（按优先级排序）
         edge_paths = [
+            # 标准安装路径
             r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
             r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            # 用户安装路径
+            os.path.expanduser(r"~\AppData\Local\Microsoft\Edge\Application\msedge.exe"),
+            # 可能的其他路径
+            r"C:\Program Files\Microsoft\Edge Beta\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge Dev\Application\msedge.exe",
         ]
+        
+        # 方法1：直接检查路径
         for path in edge_paths:
             if os.path.exists(path):
                 print(f"[系统检测] 检测到 Windows 系统，使用 Edge 路径: {path}")
                 return path
+        
+        # 方法2：通过注册表查找（如果直接路径找不到）
+        try:
+            import winreg
+            # 检查注册表中的Edge安装路径
+            reg_paths = [
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"),
+                (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"),
+            ]
+            for hkey, reg_path in reg_paths:
+                try:
+                    key = winreg.OpenKey(hkey, reg_path)
+                    edge_path = winreg.QueryValue(key, None)
+                    winreg.CloseKey(key)
+                    if edge_path and os.path.exists(edge_path):
+                        print(f"[系统检测] 通过注册表找到 Edge 路径: {edge_path}")
+                        return edge_path
+                except (FileNotFoundError, OSError):
+                    continue
+        except ImportError:
+            pass  # winreg 在某些Python版本可能不可用
+        except Exception as e:
+            print(f"[系统检测] 注册表查找失败: {e}")
+        
+        # 方法3：通过环境变量或系统PATH查找
+        try:
+            import shutil
+            edge_cmd = shutil.which("msedge")
+            if edge_cmd and os.path.exists(edge_cmd):
+                print(f"[系统检测] 通过系统PATH找到 Edge 路径: {edge_cmd}")
+                return edge_cmd
+        except Exception as e:
+            print(f"[系统检测] PATH查找失败: {e}")
+        
         print("[系统检测] ⚠️ Windows 系统下未找到 Edge 浏览器")
+        print("[系统检测] 提示：请确保已安装 Microsoft Edge 浏览器")
         return None
     
     elif system == "Darwin":  # macOS
         # macOS 系统下的 Edge 路径
         edge_paths = [
             "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            os.path.expanduser("~/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
         ]
         for path in edge_paths:
             if os.path.exists(path):
@@ -199,42 +245,151 @@ def _create_browser_instance():
             
             # 如果找到了 Edge 路径，设置浏览器可执行文件路径
             if edge_binary_path:
-                edge_options.binary_location = edge_binary_path
-                print(f"[浏览器] 已设置 Edge 浏览器路径: {edge_binary_path}")
+                try:
+                    edge_options.binary_location = edge_binary_path
+                    print(f"[浏览器] 已设置 Edge 浏览器路径: {edge_binary_path}")
+                except Exception as e:
+                    print(f"[浏览器] ⚠️ 设置 Edge 路径失败: {e}，将使用系统默认路径")
             else:
                 print("[浏览器] ⚠️ 未找到 Edge 浏览器路径，将使用系统默认路径")
+                print("[浏览器] 提示：Selenium 将尝试自动查找 Edge 浏览器")
             
             edge_options.add_argument('--window-size=1920,1080')
             edge_options.add_argument('--disable-blink-features=AutomationControlled')
-            edge_options.add_experimental_option('excludeSwitches', ['enable-automation'])
+            edge_options.add_experimental_option('excludeSwitches', ['enable-automation', 'enable-logging'])
             edge_options.add_experimental_option('useAutomationExtension', False)
             edge_options.page_load_strategy = 'normal'
             # 防止浏览器被意外关闭
             edge_options.add_argument('--disable-infobars')  # 隐藏信息栏
             edge_options.add_argument('--no-first-run')  # 跳过首次运行
             edge_options.add_argument('--no-default-browser-check')  # 跳过默认浏览器检查
+            # 禁用各种提示和弹窗
+            edge_options.add_argument('--disable-popup-blocking')  # 禁用弹窗阻止
+            edge_options.add_argument('--disable-notifications')  # 禁用通知
+            edge_options.add_argument('--disable-save-password-bubble')  # 禁用密码保存提示
+            edge_options.add_argument('--disable-single-click-autofill')  # 禁用自动填充提示
+            edge_options.add_argument('--disable-translate')  # 禁用翻译提示
+            edge_options.add_argument('--disable-features=TranslateUI')  # 禁用翻译UI
+            edge_options.add_argument('--disable-component-update')  # 禁用组件更新提示
+            # 添加首选项来禁用重置设置提示
+            try:
+                prefs = {
+                    'profile.default_content_setting_values.notifications': 2,  # 禁用通知
+                    'profile.default_content_settings.popups': 0,  # 允许弹窗（避免阻止）
+                    'credentials_enable_service': False,  # 禁用凭据服务
+                    'profile.password_manager_enabled': False,  # 禁用密码管理器
+                }
+                edge_options.add_experimental_option('prefs', prefs)
+            except Exception as e:
+                print(f"[浏览器] ⚠️ 设置首选项失败: {e}，继续使用默认配置")
             # 保持浏览器打开（即使所有标签页关闭）
             edge_options.add_experimental_option('detach', True)  # 保持浏览器进程运行
             
             # 启动浏览器
-            service = Service()
-            driver = webdriver.Edge(service=service, options=edge_options)
-            driver.set_page_load_timeout(20)
-            driver.implicitly_wait(5)
-            
-            # 访问页面
-            url = f"http://{HOST}:{_get_actual_port()}"
-            print(f"[浏览器] 正在访问: {url}")
-            driver.get(url)
-            
-            # 保存到全局变量
-            _global_browser_driver = driver
-            
-            print(f"✓ 已使用 Selenium 打开 Edge 浏览器: {url}")
-            print(f"   浏览器实例已保存，截图功能将复用此实例")
-            print(f"   ⚠️ 重要提示：请勿关闭此浏览器窗口，否则截图功能将无法正常工作！")
-            
-            return driver
+            try:
+                service = Service()
+                print("[浏览器] 正在启动 Edge 浏览器...")
+                driver = webdriver.Edge(service=service, options=edge_options)
+                driver.set_page_load_timeout(20)
+                driver.implicitly_wait(5)
+                
+                # 关闭所有额外的标签页（只保留第一个）
+                try:
+                    window_handles = driver.window_handles
+                    if len(window_handles) > 1:
+                        print(f"[浏览器] 检测到 {len(window_handles)} 个标签页，关闭多余的标签页...")
+                        # 切换到第一个窗口
+                        driver.switch_to.window(window_handles[0])
+                        # 关闭其他窗口
+                        for handle in window_handles[1:]:
+                            try:
+                                driver.switch_to.window(handle)
+                                driver.close()
+                            except:
+                                pass
+                        # 切换回第一个窗口
+                        driver.switch_to.window(window_handles[0])
+                        print("[浏览器] ✓ 已关闭多余的标签页")
+                except Exception as e:
+                    print(f"[浏览器] ⚠️ 关闭多余标签页时出错（继续）: {e}")
+                
+                # 访问页面
+                url = f"http://{HOST}:{_get_actual_port()}"
+                print(f"[浏览器] 正在访问: {url}")
+                driver.get(url)
+                
+                # 再次检查并关闭可能新打开的标签页
+                try:
+                    time.sleep(0.5)  # 等待一下，确保所有标签页都已打开
+                    window_handles = driver.window_handles
+                    if len(window_handles) > 1:
+                        print(f"[浏览器] 检测到访问后仍有 {len(window_handles)} 个标签页，关闭多余的...")
+                        # 找到包含目标URL的窗口
+                        target_handle = None
+                        for handle in window_handles:
+                            driver.switch_to.window(handle)
+                            if url in driver.current_url or HOST in driver.current_url:
+                                target_handle = handle
+                                break
+                        
+                        # 切换到目标窗口，关闭其他窗口
+                        if target_handle:
+                            driver.switch_to.window(target_handle)
+                            for handle in window_handles:
+                                if handle != target_handle:
+                                    try:
+                                        driver.switch_to.window(handle)
+                                        driver.close()
+                                    except:
+                                        pass
+                            driver.switch_to.window(target_handle)
+                        else:
+                            # 如果找不到目标窗口，保留第一个，关闭其他的
+                            driver.switch_to.window(window_handles[0])
+                            for handle in window_handles[1:]:
+                                try:
+                                    driver.switch_to.window(handle)
+                                    driver.close()
+                                except:
+                                    pass
+                            driver.switch_to.window(window_handles[0])
+                        print("[浏览器] ✓ 已清理多余的标签页")
+                except Exception as e:
+                    print(f"[浏览器] ⚠️ 清理标签页时出错（继续）: {e}")
+                
+                # 保存到全局变量
+                _global_browser_driver = driver
+                
+                print(f"✓ 已使用 Selenium 打开 Edge 浏览器: {url}")
+                print(f"   浏览器实例已保存，截图功能将复用此实例")
+                print(f"   ⚠️ 重要提示：请勿关闭此浏览器窗口，否则截图功能将无法正常工作！")
+                
+                return driver
+            except Exception as e:
+                error_msg = str(e)
+                print(f"[浏览器] ❌ 启动 Edge 浏览器失败: {error_msg}")
+                
+                # 提供详细的错误诊断信息
+                if "WebDriver" in error_msg or "driver" in error_msg.lower():
+                    print("[浏览器] 诊断：可能是 Edge WebDriver 版本不匹配")
+                    print("[浏览器] 解决方案：")
+                    print("   1. 确保已安装最新版本的 Microsoft Edge 浏览器")
+                    print("   2. Selenium 4.x 会自动管理 WebDriver，但需要网络连接下载")
+                    print("   3. 如果网络受限，请手动下载匹配的 EdgeDriver")
+                
+                if "path" in error_msg.lower() or "not found" in error_msg.lower():
+                    print("[浏览器] 诊断：可能是 Edge 浏览器路径问题")
+                    print("[浏览器] 解决方案：")
+                    print("   1. 确保已安装 Microsoft Edge 浏览器")
+                    print("   2. 尝试重新安装 Edge 浏览器")
+                
+                if "permission" in error_msg.lower() or "access" in error_msg.lower():
+                    print("[浏览器] 诊断：可能是权限问题")
+                    print("[浏览器] 解决方案：")
+                    print("   1. 尝试以管理员身份运行程序")
+                    print("   2. 检查防火墙和杀毒软件设置")
+                
+                raise
             
     except Exception as e:
         print(f"[浏览器] ⚠️ 创建浏览器实例失败: {e}")
@@ -1195,83 +1350,166 @@ if __name__ == "__main__":
     启动Flask服务器并自动打开浏览器
     """
     import os
-    
-    # 检查端口是否可用，如果被占用则自动查找可用端口
-    actual_port = PORT
-    if not _is_port_available(HOST, PORT):
-        print(f"⚠️ 端口 {PORT} 已被占用，正在查找可用端口...")
-        available_port = _find_available_port(HOST, PORT, max_attempts=10)
-        if available_port:
-            actual_port = available_port
-            print(f"✓ 找到可用端口: {actual_port}")
-        else:
-            print(f"❌ 错误：无法找到可用端口（已尝试 {PORT} 到 {PORT + 9}）")
-            print(f"   请关闭占用端口的程序，或修改 PORT 配置")
-            sys.exit(1)
-    
-    # 更新全局实际端口变量
-    _actual_port = actual_port
-    
-    # 使用 Selenium 打开浏览器的函数（使用闭包捕获 actual_port）
-    def open_browser():
-        """延迟打开浏览器，确保服务器已启动，使用 Selenium 打开浏览器供截图功能复用"""
-        time.sleep(1.5)  # 等待服务器启动
-        url = f"http://{HOST}:{actual_port}"
-        
-        if not SELENIUM_AVAILABLE:
-            print(f"⚠ Selenium 未安装，无法自动打开浏览器")
-            print(f"   请手动访问: {url}")
-            return
-        
-        # 检查是否已有有效的浏览器实例
-        driver = _check_browser_instance()
-        if driver is None:
-            print(f"⚠ 无法创建浏览器实例")
-            print(f"   请手动访问: {url}")
-        else:
-            # 如果浏览器已打开但不在正确的URL，导航到正确页面
-            try:
-                current_url = driver.current_url
-                if current_url != url:
-                    print(f"[浏览器] 浏览器已打开，正在导航到: {url}")
-                    driver.get(url)
-                else:
-                    print(f"✓ 浏览器已打开并位于: {url}")
-            except Exception as e:
-                print(f"⚠ 访问页面失败: {e}")
-                # 尝试重新创建浏览器实例
-                _create_browser_instance()
-    
-    # 打印启动信息
-    print("=" * 60)
-    print("🚀 网点路线优化系统正在启动...")
-    print(f"📍 访问地址: http://{HOST}:{actual_port}")
-    print(f"🔑 API密钥: {'已配置' if BAIDU_WEB_AK else '未配置'}")
-    print(f"🐛 调试模式: {'开启' if DEBUG_MODE else '关闭'}")
-    print("=" * 60)
-    print("💡 提示：按 Ctrl+C 停止服务器")
-    print("=" * 60)
+    import traceback
     
     try:
-        # 只在主进程中打开浏览器（避免reloader导致重复打开）
-        # WERKZEUG_RUN_MAIN 只在reloader子进程中为'true'
-        # 主进程中没有这个环境变量，所以只在主进程中打开浏览器
-        if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
-            # 这是主进程，打开浏览器
-            browser_thread = threading.Thread(target=open_browser)
-            browser_thread.daemon = True
-            browser_thread.start()
-        # 如果是reloader子进程，不打开浏览器
-        
-        # 禁用reloader以避免重复打开浏览器，但保留debug功能
-        app.run(host=HOST, port=actual_port, debug=DEBUG_MODE, use_reloader=False)
-    except OSError as e:
-        if "Address already in use" in str(e) or "address is already in use" in str(e).lower():
-            print(f"\n❌ 错误：端口 {actual_port} 已被占用")
-            print(f"   请关闭占用该端口的程序，或修改 PORT 配置")
+        # 打印系统信息（用于诊断）
+        print("=" * 60)
+        print("系统信息:")
+        print(f"  操作系统: {platform.system()} {platform.release()}")
+        if hasattr(sys, 'frozen'):
+            print(f"  运行模式: 打包后的EXE")
+            print(f"  程序路径: {sys.executable}")
         else:
-            print(f"\n❌ 启动失败: {e}")
-    except KeyboardInterrupt:
-        print("\n\n👋 服务器已停止")
+            print(f"  运行模式: Python脚本")
+            print(f"  Python版本: {sys.version.split()[0]}")
+            print(f"  程序路径: {os.path.abspath(__file__)}")
+        print("=" * 60)
+        print()
+        
+        # 检查端口是否可用，如果被占用则自动查找可用端口
+        actual_port = PORT
+        if not _is_port_available(HOST, PORT):
+            print(f"⚠️ 端口 {PORT} 已被占用，正在查找可用端口...")
+            available_port = _find_available_port(HOST, PORT, max_attempts=10)
+            if available_port:
+                actual_port = available_port
+                print(f"✓ 找到可用端口: {actual_port}")
+            else:
+                print(f"❌ 错误：无法找到可用端口（已尝试 {PORT} 到 {PORT + 9}）")
+                print(f"   请关闭占用端口的程序，或修改 PORT 配置")
+                input("按回车键退出...")
+                sys.exit(1)
+        
+        # 更新全局实际端口变量
+        _actual_port = actual_port
+        
+        # 使用 Selenium 打开浏览器的函数（使用闭包捕获 actual_port）
+        def open_browser():
+            """延迟打开浏览器，确保服务器已启动，使用 Selenium 打开浏览器供截图功能复用"""
+            time.sleep(1.5)  # 等待服务器启动
+            url = f"http://{HOST}:{actual_port}"
+            
+            if not SELENIUM_AVAILABLE:
+                print(f"⚠️ Selenium 未安装，无法自动打开浏览器")
+                print(f"   请手动访问: {url}")
+                return
+            
+            # 检查是否已有有效的浏览器实例
+            try:
+                driver = _check_browser_instance()
+                if driver is None:
+                    print(f"⚠️ 无法创建浏览器实例")
+                    print(f"   请手动访问: {url}")
+                else:
+                    # 关闭多余的标签页，只保留目标页面
+                    try:
+                        window_handles = driver.window_handles
+                        if len(window_handles) > 1:
+                            # 找到包含目标URL的窗口
+                            target_handle = None
+                            for handle in window_handles:
+                                driver.switch_to.window(handle)
+                                current_url = driver.current_url
+                                if url in current_url or HOST in current_url:
+                                    target_handle = handle
+                                    break
+                            
+                            # 切换到目标窗口，关闭其他窗口
+                            if target_handle:
+                                driver.switch_to.window(target_handle)
+                                for handle in window_handles:
+                                    if handle != target_handle:
+                                        try:
+                                            driver.switch_to.window(handle)
+                                            # 检查是否是data:页面或空白页
+                                            if 'data:' in driver.current_url or driver.current_url == 'about:blank' or not driver.current_url.startswith('http'):
+                                                driver.close()
+                                        except:
+                                            pass
+                                driver.switch_to.window(target_handle)
+                            else:
+                                # 如果找不到目标窗口，保留第一个，关闭其他的
+                                driver.switch_to.window(window_handles[0])
+                                for handle in window_handles[1:]:
+                                    try:
+                                        driver.switch_to.window(handle)
+                                        if 'data:' in driver.current_url or driver.current_url == 'about:blank' or not driver.current_url.startswith('http'):
+                                            driver.close()
+                                    except:
+                                        pass
+                                driver.switch_to.window(window_handles[0])
+                    except Exception as e:
+                        print(f"[浏览器] ⚠️ 清理标签页时出错（继续）: {e}")
+                    
+                    # 如果浏览器已打开但不在正确的URL，导航到正确页面
+                    try:
+                        driver.switch_to.window(driver.window_handles[0])
+                        current_url = driver.current_url
+                        if current_url != url and not url in current_url:
+                            print(f"[浏览器] 浏览器已打开，正在导航到: {url}")
+                            driver.get(url)
+                        else:
+                            print(f"✓ 浏览器已打开并位于: {url}")
+                    except Exception as e:
+                        print(f"⚠️ 访问页面失败: {e}")
+                        # 尝试重新创建浏览器实例
+                        _create_browser_instance()
+            except Exception as e:
+                print(f"⚠️ 打开浏览器时出错: {e}")
+                print(f"   请手动访问: {url}")
+                # 只在调试模式下打印详细错误
+                if DEBUG_MODE:
+                    print(f"   错误详情:\n{traceback.format_exc()}")
+        
+        # 打印启动信息
+        print("=" * 60)
+        print("🚀 网点路线优化系统正在启动...")
+        print(f"📍 访问地址: http://{HOST}:{actual_port}")
+        print(f"🔑 API密钥: {'已配置' if BAIDU_WEB_AK else '未配置'}")
+        print(f"🐛 调试模式: {'开启' if DEBUG_MODE else '关闭'}")
+        print("=" * 60)
+        print("💡 提示：按 Ctrl+C 停止服务器")
+        print("=" * 60)
+        
+        # 在后台线程中打开浏览器
+        browser_thread = threading.Thread(target=open_browser, daemon=True)
+        browser_thread.start()
+        
+        # 启动Flask服务器
+        try:
+            app.run(host=HOST, port=actual_port, debug=DEBUG_MODE, use_reloader=False)
+        except OSError as e:
+            if "Address already in use" in str(e) or "address is already in use" in str(e).lower():
+                print(f"\n❌ 错误：端口 {actual_port} 已被占用")
+                print(f"   请关闭占用该端口的程序，或修改 PORT 配置")
+            else:
+                print(f"\n❌ 启动失败: {e}")
+                if DEBUG_MODE:
+                    print(f"   错误详情:\n{traceback.format_exc()}")
+            input("按回车键退出...")
+        except KeyboardInterrupt:
+            print("\n\n👋 服务器已停止")
+        except Exception as e:
+            print(f"\n❌ 发生错误: {e}")
+            if DEBUG_MODE:
+                print(f"   错误详情:\n{traceback.format_exc()}")
+            print("\n如果问题持续，请检查：")
+            print("  1. 是否已安装 Microsoft Edge 浏览器")
+            print("  2. 防火墙是否阻止了程序运行")
+            print("  3. 是否有足够的系统权限")
+            print("  4. 查看错误详情（如果调试模式已开启）")
+            input("按回车键退出...")
+    
     except Exception as e:
-        print(f"\n❌ 发生错误: {e}")
+        print(f"\n❌ 程序启动失败: {e}")
+        print(f"   错误类型: {type(e).__name__}")
+        if DEBUG_MODE:
+            print(f"   错误详情:\n{traceback.format_exc()}")
+        print("\n常见问题解决方案：")
+        print("  1. 确保已安装 Microsoft Edge 浏览器")
+        print("  2. 确保已安装所有必要的系统库（Visual C++ Redistributable）")
+        print("  3. 尝试以管理员身份运行")
+        print("  4. 检查杀毒软件是否阻止了程序运行")
+        input("按回车键退出...")
+        sys.exit(1)

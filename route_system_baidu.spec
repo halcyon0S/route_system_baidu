@@ -30,6 +30,12 @@ a = Analysis(
         'selenium.webdriver.edge.service',
         'selenium.webdriver.edge.options',
         'selenium.webdriver.common.by',
+        'selenium.webdriver.support',
+        'selenium.webdriver.support.ui',
+        'selenium.webdriver.support.expected_conditions',
+        'selenium.common.exceptions',
+        'winreg',  # Windows注册表访问（用于查找Edge路径）
+        'shutil',  # 用于查找可执行文件
     ],
     hookspath=[],
     hooksconfig={},
