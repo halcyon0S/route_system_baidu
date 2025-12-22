@@ -499,10 +499,10 @@ def _safe_float(x) -> float:
 def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
     """
     读取Excel文件，解析网点数据
-    支持列：经度、纬度、网点名称、备注(可选)、网组(可选)、工号(可选)、姓名(可选)、县区(可选)、调整(可选)
+    支持列：经度、纬度、网点名称、备注(可选)、网组(可选)、工号(可选)、姓名(可选)、县区(可选)、调整(可选)、遮罩(可选)
     
     Returns:
-        网点列表，每个网点包含：lng, lat, name, remark, group, employee_id, employee_name, district, adjustment
+        网点列表，每个网点包含：lng, lat, name, remark, group, employee_id, employee_name, district, adjustment, mask
     """
     df = pd.read_excel(file_stream)
 
@@ -512,7 +512,7 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
     cols = set(df.columns.astype(str))
     missing = needed - cols
     if missing:
-        raise ValueError(f"Excel缺少列：{', '.join(missing)}。需要：经度、纬度、网点名称；备注、网组、工号、姓名、县区、调整可选。")
+        raise ValueError(f"Excel缺少列：{', '.join(missing)}。需要：经度、纬度、网点名称；备注、网组、工号、姓名、县区、调整、遮罩可选。")
 
     if "备注" not in df.columns:
         df["备注"] = ""
@@ -526,6 +526,8 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
         df["县区"] = ""
     if "调整" not in df.columns:
         df["调整"] = ""
+    if "遮罩" not in df.columns:
+        df["遮罩"] = ""
 
     locations = []
     for _, r in df.iterrows():
@@ -538,6 +540,7 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
         employee_name = "" if pd.isna(r["姓名"]) else str(r["姓名"]).strip()
         district = "" if pd.isna(r["县区"]) else str(r["县区"]).strip()
         adjustment = "" if pd.isna(r["调整"]) else str(r["调整"]).strip()
+        mask = "" if pd.isna(r["遮罩"]) else str(r["遮罩"]).strip()
         if not name:
             continue
         if math.isnan(lng) or math.isnan(lat):
@@ -551,7 +554,8 @@ def _read_excel_locations(file_stream) -> List[Dict[str, Any]]:
             "employee_id": employee_id,
             "employee_name": employee_name,
             "district": district,
-            "adjustment": adjustment
+            "adjustment": adjustment,
+            "mask": mask
         })
     return locations
 
@@ -1114,6 +1118,7 @@ def capture_screenshot_endpoint():
         employee_id = data.get('employee_id', '')
         employee_name = data.get('employee_name', '')
         adjustment = data.get('adjustment', '')
+        mask_text = data.get('mask_text', '')
         
         # 获取当前应用URL
         url = f"http://{HOST}:{_get_actual_port()}"
@@ -1202,7 +1207,8 @@ def capture_screenshot_endpoint():
                     group_name=group_name,
                     employee_id=employee_id,
                     employee_name=employee_name,
-                    adjustment=adjustment
+                    adjustment=adjustment,
+                    mask_text=mask_text
                 )
                 # 截图成功，跳出重试循环
                 if retry_count > 0:

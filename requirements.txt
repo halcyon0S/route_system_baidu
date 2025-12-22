@@ -4,4 +4,6 @@ requests==2.31.0
 openpyxl==3.1.2
 pyinstaller==6.3.0
 selenium==4.15.2
+Pillow==10.1.0
+python-pptx==0.6.21
 

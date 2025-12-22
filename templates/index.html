@@ -136,6 +136,28 @@
 </head>
 
 <body>
+  <!-- 遮罩层（悬浮在控制面板上方） -->
+  <div id="mask-overlay" style="
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    width: 380px;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 15px 20px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    z-index: 1001;
+    display: none;
+    font-size: 18px;
+    font-weight: bold;
+    color: #333;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 200px;
+    overflow-y: auto;
+    border-radius: 10px;
+    border: 2px solid #3366FF;
+  "></div>
+
   <div id="control-panel">
     <h2>📍 网点路线优化系统（百度地图）</h2>
 
@@ -147,8 +169,8 @@
     <div id="excel-tab" class="tab-content active">
       <div class="excel-template">
         <strong>📋 Excel格式要求：</strong><br>
-        列名：<code>经度</code> <code>纬度</code> <code>网点名称</code> <code>备注(可选)</code> <code>网组(可选)</code> <code>工号(可选)</code> <code>姓名(可选)</code> <code>县区(可选)</code> <code>调整(可选)</code><br>
-        <small style="color: #666;">支持批量导入：首先按"调整"字段分组（调整前/调整后），然后在同字段下按工号、网组分组处理；如有县区字段，用于绘制行政区划边界</small>
+        列名：<code>经度</code> <code>纬度</code> <code>网点名称</code> <code>备注(可选)</code> <code>网组(可选)</code> <code>工号(可选)</code> <code>姓名(可选)</code> <code>县区(可选)</code> <code>调整(可选)</code> <code>遮罩(可选)</code><br>
+        <small style="color: #666;">支持批量导入：首先按"调整"字段分组（调整前/调整后），然后在同字段下按工号、网组分组处理；如有县区字段，用于绘制行政区划边界；遮罩字段内容会在截图时显示在控制面板上方（悬浮显示，字体放大加粗）</small>
       </div>
 
       <div class="input-group">
@@ -165,7 +187,7 @@
 
     <div id="manual-tab" class="tab-content">
       <div class="input-group">
-        <label>网点数据（格式：经度,纬度,名称,备注可选,网组可选,工号可选,姓名可选,县区可选,调整可选）</label>
+        <label>网点数据（格式：经度,纬度,名称,备注可选,网组可选,工号可选,姓名可选,县区可选,调整可选,遮罩可选）</label>
         <textarea id="locationInput" rows="8"
           placeholder="116.397428,39.90923,北京营业部,备注A
 116.404,39.915,朝阳支行
@@ -212,7 +234,7 @@
     <!-- ✅ 距离标签开关 -->
     <div style="margin-top:8px;">
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#555;font-weight:normal;">
-        <input type="checkbox" id="toggleDistanceLabels" checked onchange="toggleDistanceLabels()">
+        <input type="checkbox" id="toggleDistanceLabels" onchange="toggleDistanceLabels()">
         显示路线距离标签（黄色）
       </label>
     </div>
@@ -220,7 +242,7 @@
     <!-- ✅ 路线简版开关 -->
     <div style="margin-top:8px;">
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#555;font-weight:normal;">
-        <input type="checkbox" id="toggleRouteSimple" onchange="toggleRouteSimple()">
+        <input type="checkbox" id="toggleRouteSimple" checked onchange="toggleRouteSimple()">
         路线简版
       </label>
     </div>
@@ -325,7 +347,7 @@
 
     // ✅ 距离标签：可开关对象引用
     let distanceLabels = [];  // 保存所有距离标签引用
-    let distanceLabelsVisible = true;  // 距离标签显示状态
+    let distanceLabelsVisible = false;  // 距离标签显示状态（默认关闭）
 
     function toggleFarthestLine() {
       farthestVisible = document.getElementById('toggleFarthest')?.checked ?? true;
@@ -367,7 +389,7 @@
     }
 
     function toggleDistanceLabels() {
-      distanceLabelsVisible = document.getElementById('toggleDistanceLabels')?.checked ?? true;
+      distanceLabelsVisible = document.getElementById('toggleDistanceLabels')?.checked ?? false;
       console.log('切换距离标签显示状态:', distanceLabelsVisible);
 
       distanceLabels.forEach((label) => {
@@ -390,15 +412,15 @@
       });
     }
 
-    // 路线简版开关状态
-    let routeSimpleMode = false;
+    // 路线简版开关状态（默认开启）
+    let routeSimpleMode = true;
     // 保存当前路线结果
     let currentRouteResult = null;
     // 行政区图开关状态
     let districtMapEnabled = true;
 
     function toggleRouteSimple() {
-      routeSimpleMode = document.getElementById('toggleRouteSimple')?.checked ?? false;
+      routeSimpleMode = document.getElementById('toggleRouteSimple')?.checked ?? true;
       console.log('切换路线简版状态:', routeSimpleMode);
       
       // 如果当前有路线数据，重新渲染路线详情
@@ -796,11 +818,12 @@
         const employee_name = parts.length > 6 ? parts[6].trim() : '';  // 第七列：姓名
         const district = parts.length > 7 ? parts[7].trim() : '';  // 第八列：县区
         const adjustment = parts.length > 8 ? parts[8].trim() : '';  // 第九列：调整
+        const mask = parts.length > 9 ? parts[9].trim() : '';  // 第十列：遮罩
         if (Number.isNaN(lng) || Number.isNaN(lat)) {
           errors.push(`第${idx + 1}行：经纬度格式错误`);
           return;
         }
-        locations.push({ lng, lat, name, remark, group, employee_id, employee_name, district, adjustment });
+        locations.push({ lng, lat, name, remark, group, employee_id, employee_name, district, adjustment, mask });
       });
 
       if (errors.length) {
@@ -876,8 +899,11 @@
 
         if (currentLocations.length) {
           document.getElementById('locationInput').value =
-            currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || "", l.group || "", l.employee_id || "", l.employee_name || "", l.district || "", l.adjustment || ""].filter(x => x !== "").join(',')).join('\n');
+            currentLocations.map(l => [l.lng, l.lat, l.name, l.remark || "", l.group || "", l.employee_id || "", l.employee_name || "", l.district || "", l.adjustment || "", l.mask || ""].filter(x => x !== "").join(',')).join('\n');
         }
+        
+        // 检查是否有遮罩内容，如果有则显示遮罩层
+        updateMaskOverlay(currentLocations);
 
         // 如果有分组数据，显示自定义对话框选择截图模式
         if (data.group_count > 0) {
@@ -969,10 +995,10 @@
           // 6. 等待路线渲染
           await new Promise(resolve => setTimeout(resolve, 1000));
           
-          // 7. 截图（使用网组名称，如果没有工号则传空字符串）
+          // 7. 截图（使用网组名称，如果没有工号则传空字符串，传入当前网组的locations以获取对应的遮罩内容）
           updateBatchStatus(`📸 正在截图网组 ${groupName}...`, i + 1, totalGroups);
           try {
-            await captureScreenshot(groupName, '', '');
+            await captureScreenshot(groupName, '', '', '', locations);
             // captureScreenshot内部已经处理了响应，这里假设成功
             results.push({ 
               group: groupName, 
@@ -1111,7 +1137,7 @@
               // 7. 截图（使用新的命名规则：网组网点图-工号-姓名-调整）
               updateBatchStatus(`调整 ${adjustment} - 工号 ${employeeId}: 📸 正在截图网组 ${groupName}...`, adjIdx + 1, totalAdjustments);
               try {
-                await captureScreenshot(groupName, employeeId, employeeName, adjustment);
+                await captureScreenshot(groupName, employeeId, employeeName, adjustment, locations);
                 employeeResults.push({ 
                   group: groupName, 
                   success: true, 
@@ -1268,7 +1294,7 @@
             try {
               // 从locations中获取adjustment字段（如果存在）
               const adjustment = locations.length > 0 && locations[0].adjustment ? locations[0].adjustment : '';
-              await captureScreenshot(groupName, employeeId, employeeName, adjustment);
+              await captureScreenshot(groupName, employeeId, employeeName, adjustment, locations);
               employeeResults.push({ 
                 group: groupName, 
                 success: true, 
@@ -1950,6 +1976,9 @@
     async function drawPoints(locations) {
       clearMap();
       if (!map || !locations.length) return;
+      
+      // 更新遮罩层显示
+      updateMaskOverlay(locations);
 
       const pts = [];
       locations.forEach((loc, idx) => {
@@ -2051,6 +2080,11 @@
     async function drawRouteResult(result, autoScreenshot = true) {
       console.log('drawRouteResult 接收到的数据:', result);
       const { route, polyline, legs, total_distance, total_duration, farthest_points } = result;
+      
+      // 更新遮罩层显示（从当前路线结果中获取遮罩内容）
+      if (route && route.length > 0) {
+        updateMaskOverlay(route);
+      }
 
       clearMap();
       if (!map || !route.length) return;
@@ -2279,7 +2313,7 @@
       currentRouteResult = result;
       
       // 获取当前简版模式状态
-      routeSimpleMode = document.getElementById('toggleRouteSimple')?.checked ?? false;
+      routeSimpleMode = document.getElementById('toggleRouteSimple')?.checked ?? true;
       
       // 更新路线详情显示
       updateRouteInfo(result, routeSimpleMode);
@@ -2296,8 +2330,10 @@
           // 只有在 autoScreenshot 为 true 时才自动截图（批量处理时不会自动截图，避免重复）
           if (autoScreenshot) {
             // 滚动完成后，延迟执行截图（确保内容完全显示）
+            // 传入当前路线的route作为locations，以获取对应的遮罩内容
+            const routeForMask = result.route || [];
             setTimeout(() => {
-              captureScreenshot();
+              captureScreenshot('', '', '', '', routeForMask);
             }, 1500);  // 等待滚动动画完成后再截图
           }
         }
@@ -2437,31 +2473,132 @@
     async function manualCaptureScreenshot() {
       // 先滚动控制面板到底部，确保显示最新内容
       const panel = document.getElementById('control-panel');
+      
+      // 获取当前显示的路线数据（如果有）或当前网点数据
+      let locationsForMask = null;
+      if (currentRouteResult && currentRouteResult.route) {
+        // 如果有当前路线结果，使用路线的网点数据
+        locationsForMask = currentRouteResult.route;
+      } else {
+        // 否则使用当前网点数据
+        locationsForMask = currentLocations.length ? currentLocations : parseLocationData();
+      }
+      
       if (panel) {
         panel.scrollTo({
           top: panel.scrollHeight,
           behavior: 'smooth'
         });
-        // 等待滚动完成后再截图
+        // 等待滚动完成后再截图，传入当前数据的locations以获取对应的遮罩内容
         setTimeout(() => {
-          captureScreenshot();
+          captureScreenshot('', '', '', '', locationsForMask);
         }, 800);
       } else {
-        captureScreenshot();
+        captureScreenshot('', '', '', '', locationsForMask);
+      }
+    }
+
+    // 更新遮罩层显示（从网点数据中读取遮罩内容）
+    function updateMaskOverlay(locations) {
+      const maskOverlay = document.getElementById('mask-overlay');
+      if (!maskOverlay) return;
+      
+      // 查找最后一个有遮罩内容的网点
+      let maskText = '';
+      for (let i = locations.length - 1; i >= 0; i--) {
+        if (locations[i].mask && locations[i].mask.trim()) {
+          maskText = locations[i].mask.trim();
+          break;
+        }
+      }
+      
+      // 更新遮罩层（悬浮在控制面板上方）
+      if (maskText) {
+        maskOverlay.textContent = maskText;
+        maskOverlay.style.display = 'block';
+        // 调整控制面板位置，避免被遮罩层遮挡
+        const controlPanel = document.getElementById('control-panel');
+        if (controlPanel) {
+          const maskHeight = maskOverlay.offsetHeight || 50;
+          controlPanel.style.top = (20 + maskHeight + 10) + 'px';
+        }
+      } else {
+        maskOverlay.style.display = 'none';
+        maskOverlay.textContent = '';
+        // 恢复控制面板位置
+        const controlPanel = document.getElementById('control-panel');
+        if (controlPanel) {
+          controlPanel.style.top = '20px';
+        }
       }
     }
 
     // 截图功能
-    async function captureScreenshot(groupName = '', employeeId = '', employeeName = '', adjustment = '') {
+    async function captureScreenshot(groupName = '', employeeId = '', employeeName = '', adjustment = '', locationsForMask = null) {
       // 获取当前的UI状态（复选框状态）
       const uiState = {
         showFarthestLine: document.getElementById('toggleFarthest')?.checked ?? true,
-        showDistanceLabels: document.getElementById('toggleDistanceLabels')?.checked ?? true,
-        showRouteSimple: document.getElementById('toggleRouteSimple')?.checked ?? false
+        showDistanceLabels: document.getElementById('toggleDistanceLabels')?.checked ?? false,
+        showRouteSimple: document.getElementById('toggleRouteSimple')?.checked ?? true
       };
       
       // 判断是否为行政区图
       const isDistrictMap = groupName === '__DISTRICT_MAP__';
+      
+      // 获取遮罩内容
+      let maskText = '';
+      if (isDistrictMap) {
+        // 如果是行政区图，显示"工号-姓名-行政区图"
+        if (employeeId && employeeId.trim() && employeeName && employeeName.trim()) {
+          maskText = `${employeeId}-${employeeName}-行政区图`;
+        } else {
+          maskText = '行政区图';
+        }
+      } else {
+        // 普通网组图，优先从传入的locations中获取遮罩内容（当前绘制的网组数据）
+        let locationsToCheck = locationsForMask;
+        if (!locationsToCheck || locationsToCheck.length === 0) {
+          // 如果没有传入locations，则使用全局的currentLocations或解析输入
+          locationsToCheck = currentLocations.length ? currentLocations : parseLocationData();
+        }
+        
+        // 从locations中查找最后一个有遮罩内容的网点
+        for (let i = locationsToCheck.length - 1; i >= 0; i--) {
+          if (locationsToCheck[i].mask && locationsToCheck[i].mask.trim()) {
+            maskText = locationsToCheck[i].mask.trim();
+            break;
+          }
+        }
+      }
+      
+      // 确保遮罩层显示（如果有遮罩内容）
+      if (maskText) {
+        // 直接设置遮罩内容
+        const maskOverlay = document.getElementById('mask-overlay');
+        if (maskOverlay) {
+          maskOverlay.textContent = maskText;
+          maskOverlay.style.display = 'block';
+          // 调整控制面板位置，避免被遮罩层遮挡
+          const controlPanel = document.getElementById('control-panel');
+          if (controlPanel) {
+            const maskHeight = maskOverlay.offsetHeight || 50;
+            controlPanel.style.top = (20 + maskHeight + 10) + 'px';
+          }
+        }
+        // 等待遮罩层显示完成
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } else {
+        // 如果没有遮罩内容，隐藏遮罩层
+        const maskOverlay = document.getElementById('mask-overlay');
+        if (maskOverlay) {
+          maskOverlay.style.display = 'none';
+        }
+        // 恢复控制面板位置
+        const controlPanel = document.getElementById('control-panel');
+        if (controlPanel) {
+          controlPanel.style.top = '20px';
+        }
+      }
       const displayName = isDistrictMap ? '行政区图' : (groupName ? '网组 ' + groupName : '');
       
       // 显示截图提示在状态区域（不影响路线详情页）
@@ -2487,7 +2624,8 @@
             group_name: groupName,
             employee_id: employeeId,
             employee_name: employeeName,
-            adjustment: adjustment
+            adjustment: adjustment,
+            mask_text: maskText
           }),
           signal: controller.signal
         });
@@ -2500,6 +2638,17 @@
         // 更新状态区域（不影响路线详情页）
         if (data.error) {
           updateStatus(`❌ 截图失败：${data.error}`, 'error');
+          // 截图完成后，隐藏遮罩层
+          const maskOverlay = document.getElementById('mask-overlay');
+          if (maskOverlay) {
+            maskOverlay.style.display = 'none';
+            maskOverlay.textContent = '';
+          }
+          // 恢复控制面板位置
+          const controlPanel = document.getElementById('control-panel');
+          if (controlPanel) {
+            controlPanel.style.top = '20px';
+          }
           // 10秒后恢复就绪状态
           setTimeout(() => {
             updateStatus('就绪', 'ready');
@@ -2509,6 +2658,18 @@
         
         // 显示成功消息
         updateStatus(`✅ 截图已保存: ${data.filename}`, 'success');
+        
+        // 截图完成后，隐藏遮罩层
+        const maskOverlay = document.getElementById('mask-overlay');
+        if (maskOverlay) {
+          maskOverlay.style.display = 'none';
+          maskOverlay.textContent = '';
+        }
+        // 恢复控制面板位置
+        const controlPanel = document.getElementById('control-panel');
+        if (controlPanel) {
+          controlPanel.style.top = '20px';
+        }
         
         // 10秒后恢复就绪状态
         setTimeout(() => {
@@ -2524,6 +2685,17 @@
           updateStatus('❌ 截图请求超时，请检查Edge浏览器和网络连接', 'error');
         } else {
           updateStatus(`❌ 截图失败：${e.message || String(e)}`, 'error');
+        }
+        // 截图完成后，隐藏遮罩层
+        const maskOverlay = document.getElementById('mask-overlay');
+        if (maskOverlay) {
+          maskOverlay.style.display = 'none';
+          maskOverlay.textContent = '';
+        }
+        // 恢复控制面板位置
+        const controlPanel = document.getElementById('control-panel');
+        if (controlPanel) {
+          controlPanel.style.top = '20px';
         }
         // 10秒后恢复就绪状态
         setTimeout(() => {

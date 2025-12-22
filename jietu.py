@@ -18,7 +18,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
 
-def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "", employee_id: str = "", employee_name: str = "", adjustment: str = "") -> str:
+def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "", employee_id: str = "", employee_name: str = "", adjustment: str = "", mask_text: str = "") -> str:
     """
     使用Selenium + Edge浏览器截图页面viewport（可视区域）
     确保截取到控制面板滚动后的最新状态，并同步当前浏览器中的UI状态
@@ -32,6 +32,8 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
         group_name: 网组名称，用于截图文件命名（可选）
         employee_id: 工号，用于截图文件命名（可选）
         employee_name: 姓名，用于截图文件命名（可选）
+        adjustment: 调整字段（可选）
+        mask_text: 遮罩文本内容（可选）
     
     Returns:
         保存的文件路径
@@ -167,6 +169,46 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
             time.sleep(0.8)
         except Exception as e:
             print(f"[截图] ⚠️ 滚动控制面板时出错（继续截图）: {e}")
+        
+        # 显示遮罩内容（悬浮在控制面板上方）
+        if mask_text and mask_text.strip():
+            print(f"[截图] 显示遮罩内容: {mask_text[:50]}...")
+            try:
+                show_mask_script = f"""
+                (function() {{
+                    try {{
+                        const maskOverlay = document.getElementById('mask-overlay');
+                        const controlPanel = document.getElementById('control-panel');
+                        
+                        // 更新遮罩层（悬浮在控制面板上方）
+                        if (maskOverlay) {{
+                            maskOverlay.textContent = {repr(mask_text)};
+                            maskOverlay.style.display = 'block';
+                            
+                            // 调整控制面板位置，避免被遮罩层遮挡
+                            if (controlPanel) {{
+                                const maskHeight = maskOverlay.offsetHeight || 50;
+                                controlPanel.style.top = (20 + maskHeight + 10) + 'px';
+                            }}
+                        }}
+                        
+                        return true;
+                    }} catch(e) {{
+                        console.error('显示遮罩内容时出错:', e);
+                        return false;
+                    }}
+                }})();
+                """
+                result = driver.execute_script(show_mask_script)
+                if result:
+                    print("[截图] ✓ 遮罩内容已显示")
+                else:
+                    print("[截图] ⚠️ 遮罩内容显示可能失败，继续截图...")
+                
+                # 等待遮罩层显示完成
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"[截图] ⚠️ 显示遮罩内容时出错（继续截图）: {e}")
         
         # 应用UI状态（同步当前浏览器中的复选框状态）
         print("[截图] 同步UI状态...")
@@ -305,7 +347,7 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
             print("[截图] 使用外部浏览器实例，不关闭浏览器")
 
 
-def capture_screenshot_sync(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "", employee_id: str = "", employee_name: str = "", adjustment: str = "") -> str:
+def capture_screenshot_sync(url: str, save_dir: str = "网点图", wait_time: int = 2, ui_state: dict = None, driver_instance = None, group_name: str = "", employee_id: str = "", employee_name: str = "", adjustment: str = "", mask_text: str = "") -> str:
     """
     同步版本的截图函数（供Flask调用）
     注意：此函数已经是同步的，保留此函数以保持API兼容性
@@ -319,11 +361,13 @@ def capture_screenshot_sync(url: str, save_dir: str = "网点图", wait_time: in
         group_name: 网组名称，用于截图文件命名（可选）
         employee_id: 工号，用于截图文件命名（可选）
         employee_name: 姓名，用于截图文件命名（可选）
+        adjustment: 调整字段（可选）
+        mask_text: 遮罩文本内容（可选）
     
     Returns:
         保存的文件路径
     """
-    return capture_screenshot(url, save_dir, wait_time, ui_state, driver_instance, group_name, employee_id, employee_name, adjustment)
+    return capture_screenshot(url, save_dir, wait_time, ui_state, driver_instance, group_name, employee_id, employee_name, adjustment, mask_text)
 
 
 if __name__ == "__main__":
