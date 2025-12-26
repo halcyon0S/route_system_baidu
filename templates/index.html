@@ -648,6 +648,873 @@
       const center = new BMap.Point(116.397428, 39.90923);
       map.centerAndZoom(center, 11);
       map.enableScrollWheelZoom(true);
+      
+      // 缩放/移动/拖拽后，重新计算标签位置（使用防抖机制，确保DOM更新完成）
+      let labelUpdateTimer = null;
+      const debouncedUpdateLabels = () => {
+        if (labelUpdateTimer) clearTimeout(labelUpdateTimer);
+        labelUpdateTimer = setTimeout(() => {
+          updateLabelPositions();
+          labelUpdateTimer = null;
+        }, 200); // 增加延迟，确保DOM完全渲染
+      };
+      
+      map.addEventListener('zoomend', debouncedUpdateLabels);
+      map.addEventListener('moveend', debouncedUpdateLabels);
+      map.addEventListener('dragend', debouncedUpdateLabels);
+    }
+
+    // 保存当前路线数据（用于缩放、平移后重新计算标签位置）
+    let currentRouteData = null;
+    let currentLabelOffsets = [];
+    let manualAdjustedLabels = new Set(); // 记录已手动调整过的标签索引
+
+    // 获取标签的实际尺寸（通过DOM元素）
+    function getLabelActualSize(label) {
+      try {
+        if (label && typeof label.getContent === 'function') {
+          const labelElement = label.getContent();
+          if (labelElement) {
+            // 尝试多种方法获取尺寸
+            if (labelElement.getBoundingClientRect) {
+              const rect = labelElement.getBoundingClientRect();
+              if (rect.width > 0 && rect.height > 0) {
+                return { width: Math.max(rect.width, 80), height: Math.max(rect.height, 30) };
+              }
+            }
+            // 如果getBoundingClientRect不可用，尝试offsetWidth/offsetHeight
+            if (labelElement.offsetWidth && labelElement.offsetHeight) {
+              return { 
+                width: Math.max(labelElement.offsetWidth, 80), 
+                height: Math.max(labelElement.offsetHeight, 30) 
+              };
+            }
+            // 尝试通过计算样式获取
+            if (window.getComputedStyle) {
+              const style = window.getComputedStyle(labelElement);
+              const width = parseFloat(style.width) || 120;
+              const height = parseFloat(style.height) || 34;
+              if (width > 0 && height > 0) {
+                return { width: Math.max(width, 80), height: Math.max(height, 30) };
+              }
+            }
+          }
+        }
+      } catch(e) {
+        // 忽略错误，使用默认值
+      }
+      // 默认尺寸（包括padding和border，基于样式：padding: 5px 10px, border: 2px）
+      return { width: 120, height: 34 };
+    }
+
+    // 添加标签到标记点（在视图调整完成后调用）
+    async function addLabelsToMarkers(route, markers) {
+      if (!route || !markers || route.length !== markers.length) return;
+      
+      currentLabelOffsets = [];
+      
+      // 按顺序添加标签，确保不互相遮挡且不遮挡圆圈
+      for (let idx = 0; idx < route.length; idx++) {
+        const marker = markers[idx];
+        const loc = route[idx];
+        if (!marker || !loc) continue;
+        
+        const labelText = loc.remark ? `${idx + 1}. ${loc.remark}` : `${idx + 1}. ${loc.name}`;
+        
+        // 计算标签位置（使用实际尺寸，确保不遮挡任何圆圈）
+        const { offsetX, offsetY } = calculateLabelOffset(idx, route.length, route, currentLabelOffsets, null);
+        currentLabelOffsets.push({ offsetX, offsetY });
+        
+        const label = new BMap.Label(labelText, { offset: new BMap.Size(offsetX, offsetY) });
+        label.setStyle({
+          background: 'white',
+          border: '2px solid #2196F3',
+          padding: '5px 10px',
+          borderRadius: '5px',
+          fontSize: '13px',
+          fontWeight: 'bold',
+          boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
+          whiteSpace: 'nowrap',
+          zIndex: 10000  // 网点名称标签最高优先级，确保在所有距离标签上方
+        });
+        marker.setLabel(label);
+        
+        // 等待标签渲染，然后使用实际尺寸重新计算位置
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // 使用实际尺寸重新计算位置
+        const actualSize = getLabelActualSize(label);
+        if (actualSize) {
+          const newOffsets = currentLabelOffsets.slice(0, idx);
+          const { offsetX: newOffsetX, offsetY: newOffsetY } = calculateLabelOffset(idx, route.length, route, newOffsets, label);
+          label.setOffset(new BMap.Size(newOffsetX, newOffsetY));
+          currentLabelOffsets[idx] = { offsetX: newOffsetX, offsetY: newOffsetY };
+        }
+        
+        // 设置z-index
+        try {
+          const labelElement = label.getContent();
+          if (labelElement && labelElement.style) {
+            labelElement.style.zIndex = '10000';
+            labelElement.style.position = 'relative';
+          }
+        } catch(e) {
+          // 忽略错误
+        }
+        
+        // 启用标签拖拽功能（仅手动输入时）
+        enableLabelDragging(marker, label, idx, route);
+      }
+      
+      console.log('[标签添加] 所有标签已添加完成');
+      
+      // 等待所有标签完全渲染
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // 调整视图，确保所有圆圈和标签（包括边框）都在可见区域内
+      await adjustViewportForAllElements(route, markers);
+    }
+
+    // 调整视图，确保所有圆圈和标签（包括边框）都在可见区域内
+    async function adjustViewportForAllElements(route, markers) {
+      if (!route || route.length === 0 || !map) return;
+      
+      const mapContainer = map.getContainer();
+      if (!mapContainer) return;
+      const mapRect = mapContainer.getBoundingClientRect();
+      
+      // 控制面板参数
+      const panelLeft = 20;
+      const panelTop = 20;
+      const panelWidth = 380;
+      const panelRight = panelLeft + panelWidth;
+      const viewPadding = 5; // 视图边距
+      const effectiveLeft = panelRight + viewPadding; // 有效可视区域的左边界
+      const effectiveRight = mapRect.width - viewPadding; // 有效可视区域的右边界
+      const effectiveTop = viewPadding; // 有效可视区域的上边界
+      const effectiveBottom = mapRect.height - viewPadding; // 有效可视区域的下边界
+      
+      const markerRadius = 20.5; // 圆圈半径（像素）
+      const borderWidth = 2; // 标签边框宽度
+      const labelPadding = 5; // 标签间距
+      
+      // 计算所有圆圈和标签的边界框
+      let allBounds = {
+        minX: Infinity,
+        maxX: -Infinity,
+        minY: Infinity,
+        maxY: -Infinity
+      };
+      
+      route.forEach((loc, idx) => {
+        const pt = new BMap.Point(loc.lng, loc.lat);
+        const pixel = map.pointToPixel(pt);
+        
+        // 圆圈边界（考虑半径和边距）
+        const circleBounds = {
+          minX: pixel.x - markerRadius - labelPadding,
+          maxX: pixel.x + markerRadius + labelPadding,
+          minY: pixel.y - markerRadius - labelPadding,
+          maxY: pixel.y + markerRadius + labelPadding
+        };
+        
+        // 标签边界（如果存在）
+        if (markers && markers[idx]) {
+          const label = markers[idx].getLabel();
+          if (label && currentLabelOffsets && currentLabelOffsets[idx]) {
+            const offset = currentLabelOffsets[idx];
+            const labelX = pixel.x + offset.offsetX;
+            const labelY = pixel.y + offset.offsetY;
+            const labelSize = getLabelActualSize(label);
+            const labelTotalWidth = labelSize.width + borderWidth * 2;
+            const labelTotalHeight = labelSize.height + borderWidth * 2;
+            
+            const labelBounds = {
+              minX: labelX - labelTotalWidth / 2 - labelPadding,
+              maxX: labelX + labelTotalWidth / 2 + labelPadding,
+              minY: labelY - labelTotalHeight / 2 - labelPadding,
+              maxY: labelY + labelTotalHeight / 2 + labelPadding
+            };
+            
+            // 合并圆圈和标签边界
+            allBounds.minX = Math.min(allBounds.minX, circleBounds.minX, labelBounds.minX);
+            allBounds.maxX = Math.max(allBounds.maxX, circleBounds.maxX, labelBounds.maxX);
+            allBounds.minY = Math.min(allBounds.minY, circleBounds.minY, labelBounds.minY);
+            allBounds.maxY = Math.max(allBounds.maxY, circleBounds.maxY, labelBounds.maxY);
+          } else {
+            // 只有圆圈
+            allBounds.minX = Math.min(allBounds.minX, circleBounds.minX);
+            allBounds.maxX = Math.max(allBounds.maxX, circleBounds.maxX);
+            allBounds.minY = Math.min(allBounds.minY, circleBounds.minY);
+            allBounds.maxY = Math.max(allBounds.maxY, circleBounds.maxY);
+          }
+        } else {
+          // 只有圆圈
+          allBounds.minX = Math.min(allBounds.minX, circleBounds.minX);
+          allBounds.maxX = Math.max(allBounds.maxX, circleBounds.maxX);
+          allBounds.minY = Math.min(allBounds.minY, circleBounds.minY);
+          allBounds.maxY = Math.max(allBounds.maxY, circleBounds.maxY);
+        }
+      });
+      
+      // 检查是否需要调整视图
+      const needsAdjustment = 
+        allBounds.minX < effectiveLeft || 
+        allBounds.maxX > effectiveRight ||
+        allBounds.minY < effectiveTop ||
+        allBounds.maxY > effectiveBottom;
+      
+      if (!needsAdjustment) {
+        console.log('[视图调整] 所有元素都在有效区域内');
+        return;
+      }
+      
+      // 计算需要缩放的比例
+      const currentWidth = allBounds.maxX - allBounds.minX;
+      const currentHeight = allBounds.maxY - allBounds.minY;
+      const availableWidth = effectiveRight - effectiveLeft;
+      const availableHeight = effectiveBottom - effectiveTop;
+      
+      const scaleX = currentWidth / availableWidth;
+      const scaleY = currentHeight / availableHeight;
+      const scale = Math.max(scaleX, scaleY);
+      
+      if (scale > 1) {
+        // 需要缩小
+        const currentZoom = map.getZoom();
+        if (currentZoom > 10) {
+          const zoomReduction = Math.min(Math.ceil(Math.log2(scale)), currentZoom - 10);
+          const newZoom = Math.max(10, currentZoom - zoomReduction);
+          if (newZoom < currentZoom) {
+            map.setZoom(newZoom);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            console.log(`[视图调整] 缩小地图，缩放级别: ${currentZoom} -> ${newZoom}`);
+            
+            // 缩放后重新计算标签位置
+            updateLabelPositions();
+            await new Promise(resolve => setTimeout(resolve, 300));
+          }
+        }
+      }
+      
+      // 检查中心点偏移，如果需要，调整中心点
+      const centerX = (allBounds.minX + allBounds.maxX) / 2;
+      const centerY = (allBounds.minY + allBounds.maxY) / 2;
+      const targetCenterX = (effectiveLeft + effectiveRight) / 2;
+      const targetCenterY = (effectiveTop + effectiveBottom) / 2;
+      
+      const offsetX = centerX - targetCenterX;
+      const offsetY = centerY - targetCenterY;
+      
+      if (Math.abs(offsetX) > 10 || Math.abs(offsetY) > 10) {
+        try {
+          const centerPoint = map.getCenter();
+          const centerPixel = map.pointToPixel(centerPoint);
+          const newCenterPixel = new BMap.Pixel(centerPixel.x - offsetX, centerPixel.y - offsetY);
+          const newCenter = map.pixelToPoint(newCenterPixel);
+          map.setCenter(newCenter);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          console.log(`[视图调整] 调整地图中心`);
+          
+          // 调整中心后重新计算标签位置
+          updateLabelPositions();
+          await new Promise(resolve => setTimeout(resolve, 300));
+        } catch(e) {
+          console.warn('[视图调整] 调整中心点失败:', e);
+        }
+      }
+    }
+
+    // 计算标签偏移，自动避让圆圈与其他标签（使用实际尺寸）
+    function calculateLabelOffset(idx, total, route, existingOffsets = [], label = null) {
+      // 默认偏移，防御性返回
+      const fallback = { offsetX: (idx % 2 === 0) ? 36 : -36, offsetY: (idx % 4 < 2) ? -22 : 16 };
+      if (!map || !route || idx >= route.length) return fallback;
+
+      const pt = new BMap.Point(route[idx].lng, route[idx].lat);
+      const pixel = map.pointToPixel(pt);
+
+      // 获取实际标签尺寸
+      let labelWidth = 120;
+      let labelHeight = 34;
+      if (label) {
+        const actualSize = getLabelActualSize(label);
+        labelWidth = actualSize.width;
+        labelHeight = actualSize.height;
+      }
+
+      // 尺寸及安全距离
+      const markerRadius = 20.5;         // 圆圈半径（含边框）
+      const borderWidth = 2;             // 标签边框宽度
+      const padding = 5;                 // 标签之间的最小间距（边框外的间距）
+      const labelPadding = 5;            // 标签内边距
+      // 标签实际占用空间（包括内容、内边距、边框）
+      const labelTotalWidth = labelWidth + borderWidth * 2;
+      const labelTotalHeight = labelHeight + borderWidth * 2;
+      const minCenterDist = markerRadius + Math.max(labelTotalWidth, labelTotalHeight) / 2 + padding; // 标签中心到圆圈中心的最小安全距离
+
+      // 距离与缩放（根据缩放级别调整，确保标签始终清晰可见）
+      const zoom = map.getZoom();
+      const zoomFactor = Math.pow(1.2, zoom - 12); // 缩放因子，缩放越大，标签距离越远
+      const baseDist = Math.max(minCenterDist, 50 * zoomFactor);  // 基础距离（至少满足最小距离）
+      const minDist = minCenterDist;
+      const maxDist = Math.max(baseDist * 1.5, 150 * zoomFactor); // 最大距离（允许更远的位置）
+
+      // 生成候选偏移位置（增加更多候选位置，包括更远的距离）
+      const candidates = [];
+      const baseAngle = (idx / Math.max(1, total)) * 2 * Math.PI;
+
+      // 多圈层候选位置：从近到远
+      const distances = [baseDist, baseDist * 1.2, baseDist * 1.5, baseDist * 1.8, baseDist * 2.2];
+      distances.forEach(dist => {
+        if (dist < minDist || dist > maxDist) return;
+        // 基础角度位置
+        candidates.push({ offsetX: Math.cos(baseAngle) * dist, offsetY: Math.sin(baseAngle) * dist });
+        // 左右微调
+        for (let angleOffset of [-Math.PI/8, -Math.PI/12, Math.PI/12, Math.PI/8]) {
+          candidates.push({ 
+            offsetX: Math.cos(baseAngle + angleOffset) * dist, 
+            offsetY: Math.sin(baseAngle + angleOffset) * dist 
+          });
+        }
+      });
+
+      // 四个象限位置（多个距离层级）
+      for (let dist of [baseDist, baseDist * 1.3, baseDist * 1.7]) {
+        if (dist < minDist || dist > maxDist) continue;
+        candidates.push({ offsetX: dist, offsetY: -dist });
+        candidates.push({ offsetX: -dist, offsetY: -dist });
+        candidates.push({ offsetX: -dist, offsetY: dist });
+        candidates.push({ offsetX: dist, offsetY: dist });
+      }
+
+      // 水平和垂直方向（多个距离）
+      for (let dist of [baseDist, baseDist * 1.4, baseDist * 1.8]) {
+        if (dist < minDist || dist > maxDist) continue;
+        candidates.push({ offsetX: dist, offsetY: 0 });
+        candidates.push({ offsetX: -dist, offsetY: 0 });
+        candidates.push({ offsetX: 0, offsetY: -dist });
+        candidates.push({ offsetX: 0, offsetY: dist });
+      }
+
+      // 对角线位置
+      const diagDist = baseDist * 1.2;
+      if (diagDist >= minDist && diagDist <= maxDist) {
+        candidates.push({ offsetX: diagDist * 0.7, offsetY: -diagDist * 0.7 });
+        candidates.push({ offsetX: -diagDist * 0.7, offsetY: -diagDist * 0.7 });
+        candidates.push({ offsetX: -diagDist * 0.7, offsetY: diagDist * 0.7 });
+        candidates.push({ offsetX: diagDist * 0.7, offsetY: diagDist * 0.7 });
+      }
+
+      let best = fallback;
+      let bestScore = Number.POSITIVE_INFINITY;
+
+      // 评估每个候选位置
+      for (const cand of candidates) {
+        const dist = Math.hypot(cand.offsetX, cand.offsetY);
+        if (dist < minDist || dist > maxDist) continue;
+
+        const labelX = pixel.x + cand.offsetX;
+        const labelY = pixel.y + cand.offsetY;
+        // 标签边框框（包括边框宽度和间距）
+        const box = {
+          left: labelX - labelTotalWidth / 2 - padding,
+          right: labelX + labelTotalWidth / 2 + padding,
+          top: labelY - labelTotalHeight / 2 - padding,
+          bottom: labelY + labelTotalHeight / 2 + padding
+        };
+
+        // 检查标签是否遮挡任何圆圈（包括自身和所有其他圆圈）
+        let overlapsAnyCircle = false;
+        for (let i = 0; i < route.length; i++) {
+          const circlePt = new BMap.Point(route[i].lng, route[i].lat);
+          const circlePx = map.pointToPixel(circlePt);
+          
+          // 计算标签边界框最近点到圆圈中心的距离
+          const nearestX = Math.max(box.left, Math.min(circlePx.x, box.right));
+          const nearestY = Math.max(box.top, Math.min(circlePx.y, box.bottom));
+          const distToCircle = Math.hypot(nearestX - circlePx.x, nearestY - circlePx.y);
+          
+          // 如果距离小于圆圈半径+边框+安全边距，说明标签边框遮挡了圆圈
+          if (distToCircle < markerRadius + borderWidth + padding) {
+            overlapsAnyCircle = true;
+            break;
+          }
+        }
+        
+        if (overlapsAnyCircle) continue; // 如果遮挡任何圆圈，直接跳过
+
+        // 检查标签边框是否完全在可见视图范围内（考虑控制面板）
+        const mapContainer = map.getContainer();
+        if (mapContainer) {
+          const mapRect = mapContainer.getBoundingClientRect();
+          const panelLeft = 20;
+          const panelTop = 20;
+          const panelWidth = 380;
+          const panelRight = panelLeft + panelWidth;
+          const viewPadding = 5; // 视图边距
+          const effectiveLeft = panelRight + viewPadding; // 控制面板右侧+边距
+          const effectiveRight = mapRect.width - viewPadding; // 地图右边界-边距
+          const effectiveTop = viewPadding; // 地图上边界+边距
+          const effectiveBottom = mapRect.height - viewPadding; // 地图下边界-边距
+          
+          // 检查标签边框是否完全在有效可视区域内（包括边框）
+          if (box.left < effectiveLeft || box.right > effectiveRight || 
+              box.top < effectiveTop || box.bottom > effectiveBottom) {
+            continue; // 超出有效边界的位置不考虑
+          }
+        }
+
+        // 与之前标签、圆圈的重叠评分
+        let overlapScore = 0;
+        let hasOverlap = false;
+
+        for (let i = 0; i < Math.min(existingOffsets.length, route.length); i++) {
+          const otherPt = new BMap.Point(route[i].lng, route[i].lat);
+          const otherPx = map.pointToPixel(otherPt);
+          const off = existingOffsets[i];
+          const otherX = otherPx.x + off.offsetX;
+          const otherY = otherPx.y + off.offsetY;
+          
+          // 获取其他标签的实际尺寸（估算，因为可能还没有渲染）
+          let otherLabelWidth = labelWidth;
+          let otherLabelHeight = labelHeight;
+          // 使用估算的总尺寸（包括边框）
+          const otherLabelTotalWidth = otherLabelWidth + borderWidth * 2;
+          const otherLabelTotalHeight = otherLabelHeight + borderWidth * 2;
+          
+          // 其他标签的边框框（包括边框宽度和间距）
+          const otherBox = {
+            left: otherX - otherLabelTotalWidth / 2 - padding,
+            right: otherX + otherLabelTotalWidth / 2 + padding,
+            top: otherY - otherLabelTotalHeight / 2 - padding,
+            bottom: otherY + otherLabelTotalHeight / 2 + padding
+          };
+          
+          // 标签边框与标签边框重叠检测（完全禁止重叠）
+          const overlapX = Math.max(0, Math.min(box.right, otherBox.right) - Math.max(box.left, otherBox.left));
+          const overlapY = Math.max(0, Math.min(box.bottom, otherBox.bottom) - Math.max(box.top, otherBox.top));
+          if (overlapX > 0 && overlapY > 0) {
+            hasOverlap = true;
+            overlapScore += overlapX * overlapY * 10000; // 大幅提高重叠惩罚
+            break; // 有重叠直接跳过
+          }
+
+          // 标签边框到其他圆圈的距离，避免贴得过近
+          const labelToCircle = Math.hypot(labelX - otherPx.x, labelY - otherPx.y);
+          if (labelToCircle < markerRadius + borderWidth + padding) {
+            overlapScore += 100000;
+            hasOverlap = true;
+            break;
+          }
+        }
+
+        // 如果有重叠，直接跳过
+        if (hasOverlap) continue;
+
+        // 计算评分（距离适中、无重叠的位置得分更高）
+        const distanceScore = Math.abs(dist - baseDist * 1.2); // 偏好距离适中的位置
+        const totalScore = overlapScore + distanceScore * 0.1;
+
+        if (totalScore < bestScore) {
+          bestScore = totalScore;
+          best = { offsetX: Math.round(cand.offsetX), offsetY: Math.round(cand.offsetY) };
+          if (overlapScore === 0 && distanceScore < 5) break; // 已找到理想位置，提前结束
+        }
+      }
+
+      // 如果所有候选位置都有重叠，返回fallback（这种情况应该很少）
+      if (bestScore >= 10000) {
+        console.warn(`标签 ${idx} 无法找到完全无重叠的位置，使用默认位置`);
+      }
+
+      return best || fallback;
+    }
+
+    // 缩放/平移后更新所有标签位置（使用改进的算法确保所有标签都不重叠）
+    function updateLabelPositions() {
+      if (!currentRouteData || !currentRouteData.route || !markers.length) return;
+      const route = currentRouteData.route;
+      const newOffsets = [];
+
+      // 按顺序计算每个标签的位置，确保使用实际尺寸
+      markers.forEach((marker, idx) => {
+        if (idx >= route.length) return;
+        const label = marker.getLabel();
+        if (!label) return;
+        
+        // 如果标签已经被手动调整过，尝试保持相对位置（但也要避免重叠）
+        if (manualAdjustedLabels.has(idx) && currentLabelOffsets[idx]) {
+          // 对于手动调整过的标签，先尝试使用原位置
+          const savedOffset = currentLabelOffsets[idx];
+          // 检查这个位置是否会导致重叠
+          const actualSize = getLabelActualSize(label);
+          const hasOverlap = checkPositionOverlap(idx, savedOffset.offsetX, savedOffset.offsetY, actualSize, route, newOffsets);
+          
+          if (!hasOverlap) {
+            // 如果没有重叠，保持原位置
+            label.setOffset(new BMap.Size(savedOffset.offsetX, savedOffset.offsetY));
+            newOffsets.push({ offsetX: savedOffset.offsetX, offsetY: savedOffset.offsetY });
+          } else {
+            // 如果有重叠，重新计算位置（但尽量接近原位置）
+            const { offsetX, offsetY } = calculateLabelOffset(idx, route.length, route, newOffsets, label);
+            label.setOffset(new BMap.Size(offsetX, offsetY));
+            newOffsets.push({ offsetX, offsetY });
+          }
+        } else {
+          // 自动计算新的偏移量（传入label对象以获取实际尺寸）
+          const { offsetX, offsetY } = calculateLabelOffset(idx, route.length, route, newOffsets, label);
+          label.setOffset(new BMap.Size(offsetX, offsetY));
+          newOffsets.push({ offsetX, offsetY });
+        }
+
+        // 确保层级
+        try {
+          const style = label.getStyle();
+          if (style) {
+            style.zIndex = 10000;
+            label.setStyle(style);
+          }
+          const el = label.getContent();
+          if (el && el.style) el.style.zIndex = '10000';
+        } catch(e) {}
+      });
+
+      currentLabelOffsets = newOffsets;
+    }
+
+    // 检查指定位置是否会导致标签重叠
+    function checkPositionOverlap(idx, offsetX, offsetY, labelSize, route, existingOffsets) {
+      const pt = new BMap.Point(route[idx].lng, route[idx].lat);
+      const pixel = map.pointToPixel(pt);
+      const padding = 5;
+      const markerRadius = 20.5;
+
+      const labelX = pixel.x + offsetX;
+      const labelY = pixel.y + offsetY;
+      const box = {
+        left: labelX - labelSize.width / 2 - padding,
+        right: labelX + labelSize.width / 2 + padding,
+        top: labelY - labelSize.height / 2 - padding,
+        bottom: labelY + labelSize.height / 2 + padding
+      };
+
+      // 检查是否与标记点重叠
+      const nearestX = Math.max(box.left, Math.min(pixel.x, box.right));
+      const nearestY = Math.max(box.top, Math.min(pixel.y, box.bottom));
+      const distToMarker = Math.hypot(nearestX - pixel.x, nearestY - pixel.y);
+      if (distToMarker < markerRadius + padding) {
+        return true;
+      }
+
+      // 检查是否与其他标签重叠
+      for (let i = 0; i < Math.min(existingOffsets.length, idx); i++) {
+        const otherPt = new BMap.Point(route[i].lng, route[i].lat);
+        const otherPx = map.pointToPixel(otherPt);
+        const off = existingOffsets[i];
+        const otherX = otherPx.x + off.offsetX;
+        const otherY = otherPx.y + off.offsetY;
+        
+        // 使用估算尺寸（因为我们没有其他标签的实际尺寸）
+        const otherSize = { width: 120, height: 34 };
+        const otherBox = {
+          left: otherX - otherSize.width / 2 - padding,
+          right: otherX + otherSize.width / 2 + padding,
+          top: otherY - otherSize.height / 2 - padding,
+          bottom: otherY + otherSize.height / 2 + padding
+        };
+
+        const overlapX = Math.max(0, Math.min(box.right, otherBox.right) - Math.max(box.left, otherBox.left));
+        const overlapY = Math.max(0, Math.min(box.bottom, otherBox.bottom) - Math.max(box.top, otherBox.top));
+        if (overlapX > 0 && overlapY > 0) {
+          return true;
+        }
+
+        // 检查是否与其他标记点太近
+        const labelToCircle = Math.hypot(labelX - otherPx.x, labelY - otherPx.y);
+        if (labelToCircle < markerRadius + padding) {
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    // 启用标签拖拽功能（仅手动输入时）
+    function enableLabelDragging(marker, label, idx, route, forceRebind = false) {
+      if (!marker || !label || !route || idx >= route.length) return;
+      
+      // 判断是否是手动输入（currentLocations为空）
+      const isManualInput = currentLocations.length === 0;
+      if (!isManualInput) {
+        console.log(`标签 ${idx} 跳过拖拽（Excel导入模式）`);
+        return; // 只有手动输入时才启用拖拽
+      }
+      
+      // 延迟执行，确保标签元素已完全渲染（增加延迟时间）
+      setTimeout(() => {
+        try {
+          // 尝试多种方法获取标签元素
+          let labelElement = null;
+          
+          // 方法1: 使用 getContent() 方法（如果存在）
+          if (typeof label.getContent === 'function') {
+            labelElement = label.getContent();
+          }
+          
+          // 方法2: 如果 getContent() 失败，尝试通过 DOM 查找
+          if (!labelElement && map) {
+            try {
+              const labelPane = map.getPanes().labelPane;
+              if (labelPane) {
+                // 获取标签的文本内容
+                const labelText = route[idx].remark ? `${idx + 1}. ${route[idx].remark}` : `${idx + 1}. ${route[idx].name}`;
+                // 查找包含该文本的元素（更宽松的匹配）
+                const allLabels = labelPane.querySelectorAll('div');
+                for (let el of allLabels) {
+                  const text = el.textContent || el.innerText || '';
+                  if (text.includes(labelText.split('.')[0]) || text.trim() === labelText.trim()) {
+                    // 验证元素是否有 style 属性
+                    if (el.style && typeof el.style === 'object') {
+                      labelElement = el;
+                      break;
+                    }
+                  }
+                }
+              }
+            } catch(e) {
+              console.warn(`方法2查找标签失败:`, e);
+            }
+          }
+          
+          // 方法3: 如果还是找不到，尝试通过标记点位置查找最近的标签
+          if (!labelElement && map && marker) {
+            try {
+              const pt = new BMap.Point(route[idx].lng, route[idx].lat);
+              const pixel = map.pointToPixel(pt);
+              const labelPane = map.getPanes().labelPane;
+              if (labelPane) {
+                const allLabels = labelPane.querySelectorAll('div');
+                let minDist = Infinity;
+                let closestEl = null;
+                for (let el of allLabels) {
+                  // 验证元素是否有 style 属性
+                  if (!el.style || typeof el.style !== 'object') continue;
+                  
+                  const rect = el.getBoundingClientRect();
+                  const mapRect = map.getContainer().getBoundingClientRect();
+                  const elX = rect.left - mapRect.left + rect.width / 2;
+                  const elY = rect.top - mapRect.top + rect.height / 2;
+                  const dist = Math.hypot(elX - pixel.x, elY - pixel.y);
+                  if (dist < minDist && dist < 150) { // 距离标记点150像素内
+                    minDist = dist;
+                    closestEl = el;
+                  }
+                }
+                if (closestEl) {
+                  labelElement = closestEl;
+                }
+              }
+            } catch(e) {
+              console.warn(`方法3查找标签失败:`, e);
+            }
+          }
+          
+          // 方法4: 尝试通过百度地图内部结构查找
+          if (!labelElement && label && typeof label === 'object') {
+            try {
+              // 尝试访问百度地图 Label 的内部属性
+              if (label._div && label._div.style) {
+                labelElement = label._div;
+              } else if (label._content && label._content.style) {
+                labelElement = label._content;
+              } else if (label._dom && label._dom.style) {
+                labelElement = label._dom;
+              }
+            } catch(e) {
+              // 忽略访问私有属性的错误
+            }
+          }
+          
+          // 验证元素是否有效（必须是 DOM 元素且有 style 属性）
+          if (!labelElement || !labelElement.style || typeof labelElement.style !== 'object') {
+            console.warn(`标签 ${idx} 的元素无效，重试...`, {
+              hasElement: !!labelElement,
+              hasStyle: !!(labelElement && labelElement.style),
+              elementType: typeof labelElement
+            });
+            // 如果元素还未准备好，再等一会儿重试（最多重试3次）
+            const retryKey = `_label_${idx}_retry`;
+            const retryCount = window[retryKey] || 0;
+            if (retryCount < 3) {
+              window[retryKey] = retryCount + 1;
+              setTimeout(() => {
+                enableLabelDragging(marker, label, idx, route, forceRebind);
+              }, 500);
+            } else {
+              console.error(`标签 ${idx} 拖拽功能启用失败：无法找到有效的 DOM 元素（已重试${retryCount}次）`);
+              delete window[retryKey];
+            }
+            return;
+          }
+          
+          // 清除重试计数
+          const retryKey = `_label_${idx}_retry`;
+          if (window[retryKey]) {
+            delete window[retryKey];
+          }
+          
+          // 调试信息
+          console.log(`标签 ${idx} 元素类型:`, labelElement.tagName, labelElement.className);
+          
+          // 检查是否已经绑定过事件（避免重复绑定，除非强制重新绑定）
+          if (!forceRebind && labelElement.dataset && labelElement.dataset.dragEnabled === 'true') {
+            console.log(`标签 ${idx} 拖拽功能已存在，跳过`);
+            return;
+          }
+          
+          if (labelElement.dataset) {
+            labelElement.dataset.dragEnabled = 'true';
+          }
+          
+          // 设置可拖拽样式（确保元素有 style 属性）
+          if (labelElement.style) {
+            labelElement.style.cursor = 'move';
+            labelElement.title = '可拖拽调整位置（手动输入模式）';
+            labelElement.style.userSelect = 'none'; // 禁止文本选择
+            labelElement.style.webkitUserSelect = 'none';
+            labelElement.style.mozUserSelect = 'none';
+            labelElement.style.msUserSelect = 'none';
+          }
+          
+          // 存储拖拽状态（使用闭包避免全局污染）
+          const dragState = {
+            isDragging: false,
+            startX: 0,
+            startY: 0,
+            startOffset: null
+          };
+          
+          // 鼠标移动事件（定义为命名函数，方便移除）
+          const handleMouseMove = (e) => {
+            if (!dragState.isDragging || !dragState.startOffset) return;
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const dx = e.clientX - dragState.startX;
+            const dy = e.clientY - dragState.startY;
+            
+            // 计算新的偏移量（直接使用像素偏移）
+            const newOffsetX = dragState.startOffset.offsetX + dx;
+            const newOffsetY = dragState.startOffset.offsetY + dy;
+            
+            // 更新标签偏移
+            label.setOffset(new BMap.Size(newOffsetX, newOffsetY));
+            
+            // 更新保存的偏移量
+            if (currentLabelOffsets[idx]) {
+              currentLabelOffsets[idx].offsetX = newOffsetX;
+              currentLabelOffsets[idx].offsetY = newOffsetY;
+            } else {
+              currentLabelOffsets[idx] = { offsetX: newOffsetX, offsetY: newOffsetY };
+            }
+            // 标记为已手动调整
+            manualAdjustedLabels.add(idx);
+          };
+          
+          // 鼠标释放事件（定义为命名函数，方便移除）
+          const handleMouseUp = (e) => {
+            if (!dragState.isDragging) return;
+            e.preventDefault();
+            e.stopPropagation();
+            
+            dragState.isDragging = false;
+            
+            // 尝试获取当前元素并恢复样式
+            let currentElement = labelElement;
+            if (typeof label.getContent === 'function') {
+              currentElement = label.getContent() || labelElement;
+            }
+            if (currentElement) {
+              currentElement.style.opacity = '1';
+              currentElement.style.transition = '';
+            }
+            
+            // 移除全局事件监听器
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+            
+            // 恢复地图的拖拽功能
+            if (map) {
+              map.enableDragging();
+            }
+            
+            if (currentLabelOffsets[idx]) {
+              console.log(`标签 ${idx} 拖拽结束，新位置: (${currentLabelOffsets[idx].offsetX}, ${currentLabelOffsets[idx].offsetY})`);
+            }
+          };
+          
+          // 鼠标按下事件
+          const handleMouseDown = (e) => {
+            // 只响应左键
+            if (e.button !== 0 && e.which !== 1) return;
+            
+            e.preventDefault();
+            e.stopPropagation();
+            
+            console.log(`开始拖拽标签 ${idx}`);
+            
+            // 重新获取元素（可能已更新）
+            let currentElement = labelElement;
+            if (typeof label.getContent === 'function') {
+              currentElement = label.getContent() || labelElement;
+            }
+            if (!currentElement) {
+              console.warn(`标签 ${idx} 元素在拖拽时丢失`);
+              return;
+            }
+            
+            // 获取当前标签的偏移量
+            const currentOffset = label.getOffset();
+            dragState.startOffset = { offsetX: currentOffset.width, offsetY: currentOffset.height };
+            
+            dragState.startX = e.clientX;
+            dragState.startY = e.clientY;
+            dragState.isDragging = true;
+            
+            currentElement.style.opacity = '0.8';
+            currentElement.style.transition = 'none'; // 禁用过渡动画，拖拽更流畅
+            
+            // 添加全局事件监听器
+            document.addEventListener('mousemove', handleMouseMove, { passive: false });
+            document.addEventListener('mouseup', handleMouseUp, { passive: false });
+            
+            // 临时禁用地图的拖拽功能，避免冲突
+            if (map) {
+              map.disableDragging();
+            }
+          };
+          
+          // 绑定鼠标按下事件（使用捕获阶段，确保能捕获到事件）
+          labelElement.addEventListener('mousedown', handleMouseDown, { passive: false, capture: true });
+          
+          // 也尝试绑定到 labelElement 的所有子元素（某些情况下标签内容可能在子元素中）
+          if (labelElement.children && labelElement.children.length > 0) {
+            Array.from(labelElement.children).forEach(child => {
+              if (child && child.style && typeof child.style === 'object') {
+                child.style.cursor = 'move';
+                child.style.userSelect = 'none';
+                child.addEventListener('mousedown', handleMouseDown, { passive: false, capture: true });
+              }
+            });
+          }
+          
+          console.log(`标签 ${idx} 拖拽功能已启用（手动输入模式）`);
+          
+        } catch(e) {
+          console.error('启用标签拖拽失败:', e, e.stack);
+        }
+      }, 1000); // 延迟1000ms，确保标签完全渲染
     }
 
     // 统一的状态更新函数，确保状态栏始终显示
@@ -789,6 +1656,9 @@
       
       // ✅ 清空距离标签引用
       distanceLabels = [];
+      
+      // ✅ 清空手动调整标签记录
+      manualAdjustedLabels.clear();
     }
 
     function parseLocationData() {
@@ -1908,7 +2778,7 @@
         border: 3px solid white;
         box-shadow: 0 2px 8px rgba(0,0,0,0.4);
         position: absolute;
-        z-index: 10000;
+        z-index: ${20000 + number};
         pointer-events: none;
         cursor: pointer;
       `;
@@ -1927,9 +2797,10 @@
       });
       marker.setLabel(new BMap.Label('', { offset: new BMap.Size(-9999, -9999) }));
 
-      function NumberMarkerOverlay(point, content) {
+      function NumberMarkerOverlay(point, content, number) {
         this._point = point;
         this._content = content;
+        this._number = number;  // 保存number值，供draw方法使用
       }
       
       NumberMarkerOverlay.prototype = new BMap.Overlay();
@@ -1952,14 +2823,15 @@
             this._content.style.top = (pixel.y - 17.5) + 'px';
             this._content.style.display = 'flex';
             this._content.style.visibility = 'visible';
-            this._content.style.zIndex = '10000';
+            // 为每个标记设置唯一的z-index，确保所有数字都能显示（后面的数字z-index更高）
+            this._content.style.zIndex = (20000 + this._number).toString();
           } catch(e) {
             console.warn('绘制标记失败:', e);
           }
         }
       };
       
-      const overlay = new NumberMarkerOverlay(point, markerContent);
+      const overlay = new NumberMarkerOverlay(point, markerContent, number);
 
       map.addOverlay(overlay);
       overlays.push(overlay);
@@ -1977,6 +2849,10 @@
       clearMap();
       if (!map || !locations.length) return;
       
+      // 保存当前数据，用于缩放后重新计算
+      currentRouteData = { route: locations };
+      currentLabelOffsets = [];
+      
       // 更新遮罩层显示
       updateMaskOverlay(locations);
 
@@ -1989,36 +2865,7 @@
         map.addOverlay(marker);
         markers.push(marker);
 
-        const labelText = loc.remark ? `${idx + 1}. ${loc.remark}` : `${idx + 1}. ${loc.name}`;
-        const offsetX = (idx % 2 === 0) ? 30 : -30;
-        const offsetY = (idx % 4 < 2) ? -15 : 10;
-        const label = new BMap.Label(labelText, { offset: new BMap.Size(offsetX, offsetY) });
-        label.setStyle({
-          background: 'white',
-          border: '2px solid #2196F3',
-          padding: '5px 10px',
-          borderRadius: '5px',
-          fontSize: '13px',
-          fontWeight: 'bold',
-          boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-          whiteSpace: 'nowrap',
-          zIndex: 10000  // 网点名称标签最高优先级，确保在所有距离标签上方
-        });
-        marker.setLabel(label);
-
-        // 通过DOM直接设置z-index，确保显示在最上层
-        setTimeout(() => {
-          try {
-            const labelElement = label.getContent();
-            if (labelElement && labelElement.style) {
-              labelElement.style.zIndex = '10000';
-              labelElement.style.position = 'relative';
-            }
-          } catch(e) {
-            // 忽略错误
-          }
-        }, 100);
-
+        // 添加点击事件
         const infoHtml = `
           <div style="padding:10px;">
             <h4 style="margin:0 0 10px 0;color:#3366FF;">第 ${idx + 1} 站：${loc.name}</h4>
@@ -2038,7 +2885,7 @@
         map.setViewport(pts);
         
         // 等待视野调整完成
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 500));
         
         // 检查是否有网点被控制面板遮挡
         // 控制面板位置：left: 20px, top: 20px, max-width: 380px
@@ -2069,17 +2916,25 @@
             // 缩小1个级别，确保左侧网点不被控制面板遮挡
             const adjustedZoom = Math.max(10, currentZoom - 1);
             map.setZoom(adjustedZoom);
+            await new Promise(resolve => setTimeout(resolve, 500));
             console.log(`[地图视图] 调整缩放级别: ${currentZoom} -> ${adjustedZoom}（避免控制面板遮挡）`);
           }
         } else {
           console.log(`[地图视图] 所有网点未被控制面板遮挡，保持当前缩放级别: ${map.getZoom()}`);
         }
       }
+
+      // 等待视图调整完成后，添加标签
+      await addLabelsToMarkers(locations, markers);
     }
 
     async function drawRouteResult(result, autoScreenshot = true) {
       console.log('drawRouteResult 接收到的数据:', result);
       const { route, polyline, legs, total_distance, total_duration, farthest_points } = result;
+      
+      // 保存当前路线数据，用于缩放后重新计算
+      currentRouteData = result;
+      currentLabelOffsets = [];
       
       // 更新遮罩层显示（从当前路线结果中获取遮罩内容）
       if (route && route.length > 0) {
@@ -2168,7 +3023,7 @@
         }
       }
 
-      // 第二步：绘制标记点（后绘制，确保在上层）
+      // 第二步：先只绘制标记点（圆圈），不添加标签
       const pts = [];
       route.forEach((loc, idx) => {
         const pt = new BMap.Point(loc.lng, loc.lat);
@@ -2178,37 +3033,7 @@
         map.addOverlay(marker);
         markers.push(marker);
 
-        // 网点名称标签（确保在所有距离标签上方，包括黄色距离标签）
-        const labelText = loc.remark ? `${idx + 1}. ${loc.remark}` : `${idx + 1}. ${loc.name}`;
-        const offsetX = (idx % 2 === 0) ? 30 : -30;
-        const offsetY = (idx % 4 < 2) ? -15 : 10;
-        const label = new BMap.Label(labelText, { offset: new BMap.Size(offsetX, offsetY) });
-        label.setStyle({
-          background: 'white',
-          border: '2px solid #2196F3',
-          padding: '5px 10px',
-          borderRadius: '5px',
-          fontSize: '13px',
-          fontWeight: 'bold',
-          boxShadow: '0 2px 6px rgba(0,0,0,0.3)',
-          whiteSpace: 'nowrap',
-          zIndex: 10000  // 网点名称标签最高优先级，确保在所有距离标签上方
-        });
-        marker.setLabel(label);
-
-        // 通过DOM直接设置z-index，确保显示在最上层
-        setTimeout(() => {
-          try {
-            const labelElement = label.getContent();
-            if (labelElement && labelElement.style) {
-              labelElement.style.zIndex = '10000';
-              labelElement.style.position = 'relative';
-            }
-          } catch(e) {
-            // 忽略错误
-          }
-        }, 100);
-
+        // 添加点击事件
         const infoHtml = `
           <div style="padding:10px;">
             <h4 style="margin:0 0 10px 0;color:#3366FF;">第 ${idx + 1} 站：${loc.name}</h4>
@@ -2222,13 +3047,13 @@
         });
       });
 
-      // 如果没有路线，只设置标记点的视图
+      // 如果没有路线，调整视野以适应所有网点
       if (!polyline || !polyline.length) {
         // 调整视野以适应所有网点，检查是否被控制面板遮挡
         map.setViewport(pts);
         
         // 等待视野调整完成
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(resolve => setTimeout(resolve, 500));
         
         // 检查是否有网点被控制面板遮挡
         // 控制面板位置：left: 20px, top: 20px, max-width: 380px
@@ -2259,12 +3084,16 @@
             // 缩小1个级别，确保左侧网点不被控制面板遮挡
             const adjustedZoom = Math.max(10, currentZoom - 1);
             map.setZoom(adjustedZoom);
+            await new Promise(resolve => setTimeout(resolve, 500));
             console.log(`[地图视图] 调整缩放级别: ${currentZoom} -> ${adjustedZoom}（避免控制面板遮挡）`);
           }
         } else {
           console.log(`[地图视图] 所有网点未被控制面板遮挡，保持当前缩放级别: ${map.getZoom()}`);
         }
       }
+
+      // 第三步：等待视图调整完成后，添加标签
+      await addLabelsToMarkers(route, markers);
 
       // 强制刷新标记点标签，确保显示在最上层（在所有距离标签上方）
       setTimeout(() => {
@@ -2288,11 +3117,17 @@
               } catch(e) {
                 // 忽略DOM操作错误
               }
+              // 重新启用拖拽功能（如果是手动输入，强制重新绑定）
+              if (currentRouteData && currentRouteData.route) {
+                enableLabelDragging(marker, currentLabel, idx, currentRouteData.route, true);
+              }
             }
           } catch(e) {
             // 忽略错误
           }
         });
+        // 重新计算标签位置，避免遮挡
+        updateLabelPositions();
       }, 200);
 
       // ✅ 第三步：延迟绘制"最远直线"（确保在路线绘制完成后）
@@ -2413,6 +3248,8 @@
       }
 
       // 单个组或无分组，直接处理
+      // 判断是否是手动输入（currentLocations为空，说明是从文本框解析的）
+      const isManualInput = currentLocations.length === 0;
       showLoading('📍 正在按序计算驾车路线...');
       try {
         const resp = await fetch('/calculate', {
@@ -2422,7 +3259,8 @@
         });
         const data = await resp.json();
         if (data.error) return showError(data.error);
-        await drawRouteResult(data);
+        // 手动输入时不自动截图
+        await drawRouteResult(data, !isManualInput);
       } catch (e) {
         showError('计算失败：' + e);
       }
@@ -2452,6 +3290,8 @@
       }
 
       // 单个组或无分组，直接处理
+      // 判断是否是手动输入（currentLocations为空，说明是从文本框解析的）
+      const isManualInput = currentLocations.length === 0;
       const startName = document.getElementById('startPoint').value.trim() || null;
       showLoading('🔄 正在优化顺序并规划驾车路线...');
 
@@ -2463,7 +3303,8 @@
         });
         const data = await resp.json();
         if (data.error) return showError(data.error);
-        await drawRouteResult(data);
+        // 手动输入时不自动截图
+        await drawRouteResult(data, !isManualInput);
       } catch (e) {
         showError('优化失败：' + e);
       }
