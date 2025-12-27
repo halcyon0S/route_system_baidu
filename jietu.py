@@ -52,6 +52,7 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
     
     # 判断是否为行政区图（group_name为空或特殊标记）
     is_district_map = not group_name or group_name == "__DISTRICT_MAP__"
+    is_district_map_only = group_name == "__DISTRICT_MAP_ONLY__"
     
     if is_district_map:
         # 行政区图命名：工号-姓名-行政区图
@@ -61,6 +62,9 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
             filename = f"{safe_employee_id}-{safe_employee_name}-行政区图_{timestamp}.png"
         else:
             filename = f"行政区图_{timestamp}.png"
+    elif is_district_map_only:
+        # 仅行政区图命名：仅行政区图
+        filename = f"仅行政区图_{timestamp}.png"
     else:
         # 网组网点图命名：工号-姓名-网组网点图-网组（不包含调整字段）
         if employee_id and employee_id.strip() and employee_name and employee_name.strip():
@@ -147,21 +151,40 @@ def capture_screenshot(url: str, save_dir: str = "网点图", wait_time: int = 2
         print(f"[截图] 等待 {wait_time} 秒以确保内容完全渲染...")
         time.sleep(wait_time)
         
-        # 执行JavaScript：滚动控制面板到底部（确保显示最新内容）
-        print("[截图] 滚动控制面板到底部...")
+        # 执行JavaScript：滚动控制面板到底部和右部（确保显示最新内容）
+        print("[截图] 滚动控制面板到底部和右部...")
         try:
             scroll_script = """
             const panel = document.getElementById('control-panel');
             if (panel) {
                 // 立即滚动到底部（不使用smooth，确保快速完成）
                 panel.scrollTop = panel.scrollHeight;
+                // 立即滚动到右部
+                panel.scrollLeft = panel.scrollWidth;
                 return true;
             }
             return false;
             """
             result = driver.execute_script(scroll_script)
             if result:
-                print("[截图] ✓ 控制面板已滚动到底部")
+                # 获取滚动后的位置，用于日志输出
+                scroll_info = driver.execute_script("""
+                    const panel = document.getElementById('control-panel');
+                    if (panel) {
+                        return {
+                            scrollTop: panel.scrollTop,
+                            scrollHeight: panel.scrollHeight,
+                            scrollLeft: panel.scrollLeft,
+                            scrollWidth: panel.scrollWidth
+                        };
+                    }
+                    return null;
+                """)
+                if scroll_info:
+                    print(f"[截图] ✓ 控制面板已滚动到底部 (scrollTop: {scroll_info['scrollTop']}/{scroll_info['scrollHeight']})")
+                    print(f"[截图] ✓ 控制面板已滚动到右部 (scrollLeft: {scroll_info['scrollLeft']}/{scroll_info['scrollWidth']})")
+                else:
+                    print("[截图] ✓ 控制面板已滚动到底部和右部")
             else:
                 print("[截图] ⚠️ 未找到控制面板元素")
             

@@ -12,7 +12,7 @@
     #control-panel {
       position: absolute; top: 20px; left: 20px; background: white;
       padding: 20px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-      max-width: 380px; z-index: 1000; max-height: 85vh; overflow-y: auto;
+      max-width: 380px; z-index: 1000; max-height: 85vh; overflow-y: auto; overflow-x: auto;
     }
     h2 { margin-bottom: 15px; color: #333; font-size: 18px; }
     .input-group { margin-bottom: 15px; }
@@ -255,6 +255,14 @@
       </label>
     </div>
 
+    <!-- ✅ 仅截取行政区图开关 -->
+    <div style="margin-top:8px;">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:#555;font-weight:normal;">
+        <input type="checkbox" id="toggleDistrictMapOnly" onchange="toggleDistrictMapOnly()">
+        仅截取行政区图（跳过网组截图）
+      </label>
+    </div>
+
     <div id="route-info"></div>
   </div>
 
@@ -418,6 +426,14 @@
     let currentRouteResult = null;
     // 行政区图开关状态
     let districtMapEnabled = true;
+    // 仅截取行政区图开关状态
+    let districtMapOnlyEnabled = false;
+
+    // 仅截取行政区图开关
+    function toggleDistrictMapOnly() {
+      districtMapOnlyEnabled = document.getElementById('toggleDistrictMapOnly')?.checked ?? false;
+      console.log('切换仅截取行政区图状态:', districtMapOnlyEnabled);
+    }
 
     function toggleRouteSimple() {
       routeSimpleMode = document.getElementById('toggleRouteSimple')?.checked ?? true;
@@ -1967,65 +1983,68 @@
           
           const employeeResults = [];
           
-          // 处理该工号下的所有网组
-          for (let i = 0; i < groups.length; i++) {
-            const groupName = groups[i];
-            const locations = employeeData.groups[groupName];
-            
-            updateBatchStatus(`调整 ${adjustment} - 工号 ${employeeId}: 正在处理网组 ${i + 1}/${totalGroups}: ${groupName} (${locations.length}个网点)`, adjIdx + 1, totalAdjustments);
-            
-            try {
-              // 1. 清除地图
-              clearMap();
+          // 如果勾选了"仅截取行政区图"，跳过网组的单独截图
+          if (!districtMapOnlyEnabled) {
+            // 处理该工号下的所有网组
+            for (let i = 0; i < groups.length; i++) {
+              const groupName = groups[i];
+              const locations = employeeData.groups[groupName];
               
-              // 2. 绘制当前组的网点
-              await drawPoints(locations);
+              updateBatchStatus(`调整 ${adjustment} - 工号 ${employeeId}: 正在处理网组 ${i + 1}/${totalGroups}: ${groupName} (${locations.length}个网点)`, adjIdx + 1, totalAdjustments);
               
-              // 3. 等待一下，确保地图渲染
-              await new Promise(resolve => setTimeout(resolve, 500));
-              
-              // 4. 优化路线
-              updateBatchStatus(`调整 ${adjustment} - 工号 ${employeeId}: 🔄 正在优化网组 ${groupName} 的路线...`, adjIdx + 1, totalAdjustments);
-              const optimizeResp = await fetch('/optimize', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ locations: locations })
-              });
-              const optimizeData = await optimizeResp.json();
-              
-              if (optimizeData.error) {
-                employeeResults.push({ group: groupName, success: false, error: optimizeData.error });
-                continue;
-              }
-              
-              // 5. 绘制路线结果
-              await drawRouteResult(optimizeData, false);
-              
-              // 6. 等待路线渲染
-              await new Promise(resolve => setTimeout(resolve, 1000));
-              
-              // 7. 截图（使用新的命名规则：网组网点图-工号-姓名-调整）
-              updateBatchStatus(`调整 ${adjustment} - 工号 ${employeeId}: 📸 正在截图网组 ${groupName}...`, adjIdx + 1, totalAdjustments);
               try {
-                await captureScreenshot(groupName, employeeId, employeeName, adjustment, locations);
-                employeeResults.push({ 
-                  group: groupName, 
-                  success: true, 
-                  location_count: locations.length
+                // 1. 清除地图
+                clearMap();
+                
+                // 2. 绘制当前组的网点
+                await drawPoints(locations);
+                
+                // 3. 等待一下，确保地图渲染
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // 4. 优化路线
+                updateBatchStatus(`调整 ${adjustment} - 工号 ${employeeId}: 🔄 正在优化网组 ${groupName} 的路线...`, adjIdx + 1, totalAdjustments);
+                const optimizeResp = await fetch('/optimize', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ locations: locations })
                 });
+                const optimizeData = await optimizeResp.json();
+                
+                if (optimizeData.error) {
+                  employeeResults.push({ group: groupName, success: false, error: optimizeData.error });
+                  continue;
+                }
+                
+                // 5. 绘制路线结果
+                await drawRouteResult(optimizeData, false);
+                
+                // 6. 等待路线渲染
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // 7. 截图（使用新的命名规则：网组网点图-工号-姓名-调整）
+                updateBatchStatus(`调整 ${adjustment} - 工号 ${employeeId}: 📸 正在截图网组 ${groupName}...`, adjIdx + 1, totalAdjustments);
+                try {
+                  await captureScreenshot(groupName, employeeId, employeeName, adjustment, locations);
+                  employeeResults.push({ 
+                    group: groupName, 
+                    success: true, 
+                    location_count: locations.length
+                  });
+                } catch (e) {
+                  employeeResults.push({ 
+                    group: groupName, 
+                    success: false, 
+                    error: '截图失败: ' + String(e)
+                  });
+                }
+                
+                // 8. 等待一下再处理下一组
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
               } catch (e) {
-                employeeResults.push({ 
-                  group: groupName, 
-                  success: false, 
-                  error: '截图失败: ' + String(e)
-                });
+                employeeResults.push({ group: groupName, success: false, error: String(e) });
               }
-              
-              // 8. 等待一下再处理下一组
-              await new Promise(resolve => setTimeout(resolve, 500));
-              
-            } catch (e) {
-              employeeResults.push({ group: groupName, success: false, error: String(e) });
             }
           }
           
@@ -2122,67 +2141,70 @@
         
         const employeeResults = [];
         
-        // 处理该工号下的所有网组
-        for (let i = 0; i < groups.length; i++) {
-          const groupName = groups[i];
-          const locations = employeeData.groups[groupName];
-          
-          updateBatchStatus(`工号 ${employeeId}: 正在处理网组 ${i + 1}/${totalGroups}: ${groupName} (${locations.length}个网点)`, empIdx + 1, totalEmployees);
-          
-          try {
-            // 1. 清除地图
-            clearMap();
+        // 如果勾选了"仅截取行政区图"，跳过网组的单独截图
+        if (!districtMapOnlyEnabled) {
+          // 处理该工号下的所有网组
+          for (let i = 0; i < groups.length; i++) {
+            const groupName = groups[i];
+            const locations = employeeData.groups[groupName];
             
-            // 2. 绘制当前组的网点
-            await drawPoints(locations);
+            updateBatchStatus(`工号 ${employeeId}: 正在处理网组 ${i + 1}/${totalGroups}: ${groupName} (${locations.length}个网点)`, empIdx + 1, totalEmployees);
             
-            // 3. 等待一下，确保地图渲染
-            await new Promise(resolve => setTimeout(resolve, 500));
-            
-            // 4. 优化路线
-            updateBatchStatus(`工号 ${employeeId}: 🔄 正在优化网组 ${groupName} 的路线...`, empIdx + 1, totalEmployees);
-            const optimizeResp = await fetch('/optimize', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ locations: locations })
-            });
-            const optimizeData = await optimizeResp.json();
-            
-            if (optimizeData.error) {
-              employeeResults.push({ group: groupName, success: false, error: optimizeData.error });
-              continue;
-            }
-            
-            // 5. 绘制路线结果
-            await drawRouteResult(optimizeData, false);
-            
-            // 6. 等待路线渲染
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            // 7. 截图（使用新的命名规则：工号-姓名-网组网点图-网组）
-            updateBatchStatus(`工号 ${employeeId}: 📸 正在截图网组 ${groupName}...`, empIdx + 1, totalEmployees);
             try {
-              // 从locations中获取adjustment字段（如果存在）
-              const adjustment = locations.length > 0 && locations[0].adjustment ? locations[0].adjustment : '';
-              await captureScreenshot(groupName, employeeId, employeeName, adjustment, locations);
-              employeeResults.push({ 
-                group: groupName, 
-                success: true, 
-                location_count: locations.length
+              // 1. 清除地图
+              clearMap();
+              
+              // 2. 绘制当前组的网点
+              await drawPoints(locations);
+              
+              // 3. 等待一下，确保地图渲染
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
+              // 4. 优化路线
+              updateBatchStatus(`工号 ${employeeId}: 🔄 正在优化网组 ${groupName} 的路线...`, empIdx + 1, totalEmployees);
+              const optimizeResp = await fetch('/optimize', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ locations: locations })
               });
+              const optimizeData = await optimizeResp.json();
+              
+              if (optimizeData.error) {
+                employeeResults.push({ group: groupName, success: false, error: optimizeData.error });
+                continue;
+              }
+              
+              // 5. 绘制路线结果
+              await drawRouteResult(optimizeData, false);
+              
+              // 6. 等待路线渲染
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              
+              // 7. 截图（使用新的命名规则：工号-姓名-网组网点图-网组）
+              updateBatchStatus(`工号 ${employeeId}: 📸 正在截图网组 ${groupName}...`, empIdx + 1, totalEmployees);
+              try {
+                // 从locations中获取adjustment字段（如果存在）
+                const adjustment = locations.length > 0 && locations[0].adjustment ? locations[0].adjustment : '';
+                await captureScreenshot(groupName, employeeId, employeeName, adjustment, locations);
+                employeeResults.push({ 
+                  group: groupName, 
+                  success: true, 
+                  location_count: locations.length
+                });
+              } catch (e) {
+                employeeResults.push({ 
+                  group: groupName, 
+                  success: false, 
+                  error: '截图失败: ' + String(e)
+                });
+              }
+              
+              // 8. 等待一下再处理下一组
+              await new Promise(resolve => setTimeout(resolve, 500));
+              
             } catch (e) {
-              employeeResults.push({ 
-                group: groupName, 
-                success: false, 
-                error: '截图失败: ' + String(e)
-              });
+              employeeResults.push({ group: groupName, success: false, error: String(e) });
             }
-            
-            // 8. 等待一下再处理下一组
-            await new Promise(resolve => setTimeout(resolve, 500));
-            
-          } catch (e) {
-            employeeResults.push({ group: groupName, success: false, error: String(e) });
           }
         }
         
@@ -2373,6 +2395,9 @@
       
       console.log(`[行政区图] 开始绘制所有网组的路线和网点，共 ${Object.keys(groups).length} 个网组`);
       
+      // 使用Promise数组来等待所有路线加载完成
+      const routePromises = [];
+      
       for (const [groupName, groupLocs] of Object.entries(groups)) {
         const groupColor = groupColors[groupIndex % groupColors.length];
         groupIndex++;
@@ -2381,58 +2406,71 @@
         
         // 优化路线以获取顺序
         let optimizedLocs = groupLocs;
-        try {
-          const optimizeResp = await fetch('/optimize', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ locations: groupLocs })
-          });
-          const optimizeData = await optimizeResp.json();
-          
-          if (!optimizeData.error && optimizeData.route) {
-            optimizedLocs = optimizeData.route;
+        const optimizePromise = (async () => {
+          try {
+            const optimizeResp = await fetch('/optimize', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ locations: groupLocs })
+            });
+            const optimizeData = await optimizeResp.json();
+            
+            if (!optimizeData.error && optimizeData.route) {
+              optimizedLocs = optimizeData.route;
+            }
+            return optimizeData;
+          } catch (e) {
+            console.error(`优化网组 ${groupName} 路线失败:`, e);
+            return null;
           }
-        } catch (e) {
-          console.error(`优化网组 ${groupName} 路线失败:`, e);
-        }
+        })();
         
         // 先绘制路线（加粗，颜色分明），确保路线在底层
-        try {
-          const optimizeResp = await fetch('/optimize', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ locations: groupLocs })
-          });
-          const optimizeData = await optimizeResp.json();
-          
-          if (!optimizeData.error && optimizeData.polyline) {
-            const routePoints = optimizeData.polyline.map(p => new BMap.Point(p[0], p[1]));
-            const polyline = new BMap.Polyline(routePoints, {
-              strokeColor: groupColor,
-              strokeWeight: 4,  // 路线线条（稍微细一点）
-              strokeOpacity: 0.9
-            });
-            map.addOverlay(polyline);
-            overlays.push(polyline);
+        const routePromise = optimizePromise.then(async (optimizeData) => {
+          if (optimizeData && !optimizeData.error && optimizeData.polyline) {
+            try {
+              const routePoints = optimizeData.polyline.map(p => new BMap.Point(p[0], p[1]));
+              const polyline = new BMap.Polyline(routePoints, {
+                strokeColor: groupColor,
+                strokeWeight: 4,  // 路线线条（稍微细一点）
+                strokeOpacity: 0.9
+              });
+              map.addOverlay(polyline);
+              overlays.push(polyline);
+              
+              // 等待路线渲染到地图上
+              await new Promise(resolve => setTimeout(resolve, 200));
+              console.log(`[行政区图] ✓ 网组 ${groupName} 路线已绘制并渲染完成`);
+            } catch (e) {
+              console.error(`[行政区图] 绘制网组 ${groupName} 路线失败:`, e);
+            }
           }
-        } catch (e) {
-          console.error(`[行政区图] 绘制网组 ${groupName} 路线失败:`, e);
-        }
-        
-        // 后绘制网点（使用百度地图默认Marker样式），确保标记在上层显示
-        optimizedLocs.forEach((loc, idx) => {
-          const pt = new BMap.Point(loc.lng, loc.lat);
-          
-          // 使用百度地图JS API自带的默认Marker样式
-          const marker = new BMap.Marker(pt);
-          map.addOverlay(marker);
-          markers.push(marker);
+          return optimizeData;
         });
         
-        console.log(`[行政区图] 网组 ${groupName} 已绘制 ${optimizedLocs.length} 个网点标记`);
+        routePromises.push(routePromise);
+        
+        // 后绘制网点（使用百度地图默认Marker样式），确保标记在上层显示
+        optimizePromise.then((optimizeData) => {
+          const locsToUse = (optimizeData && !optimizeData.error && optimizeData.route) ? optimizeData.route : groupLocs;
+          locsToUse.forEach((loc, idx) => {
+            const pt = new BMap.Point(loc.lng, loc.lat);
+            
+            // 使用百度地图JS API自带的默认Marker样式
+            const marker = new BMap.Marker(pt);
+            map.addOverlay(marker);
+            markers.push(marker);
+          });
+          console.log(`[行政区图] 网组 ${groupName} 已绘制 ${locsToUse.length} 个网点标记`);
+        });
       }
       
-      // 等待所有网组路线和网点绘制完成
+      // 等待所有网组路线加载和渲染完成
+      console.log(`[行政区图] 等待所有 ${routePromises.length} 个网组的路线加载完成...`);
+      await Promise.all(routePromises);
+      console.log(`[行政区图] ✓ 所有路线已加载完成`);
+      
+      // 额外等待确保地图完全渲染
       await new Promise(resolve => setTimeout(resolve, 500));
       
       // 现在绘制行政区边界（在路线和网点之上）
@@ -2495,6 +2533,7 @@
           const boundaryPromise = new Promise((resolve) => {
             let boundaryFound = false;
             let attemptIndex = 0;
+            let polygonsForThisDistrict = [];  // 记录这个行政区绘制的多边形
             
             const tryGetBoundary = (nameToTry) => {
               console.log(`[行政区图] 尝试获取边界: ${nameToTry}`);
@@ -2518,11 +2557,20 @@
                       map.addOverlay(polygon);
                       overlays.push(polygon);  // 添加到overlays数组，确保clearMap()能清除
                       districtPolygons.push(polygon);
-                      console.log(`[行政区图] ✓ 成功绘制多边形 ${i + 1}/${rs.boundaries.length}`);
+                      polygonsForThisDistrict.push(polygon);  // 记录这个行政区的多边形
+                      console.log(`[行政区图] ✓ 成功绘制多边形 ${i + 1}/${rs.boundaries.length} (${districtName})`);
                     } catch (polyErr) {
                       console.error(`[行政区图] ❌ 绘制多边形 ${i + 1} 失败:`, polyErr);
                     }
                   }
+                  
+                  // 验证多边形是否真的添加成功
+                  if (polygonsForThisDistrict.length > 0) {
+                    console.log(`[行政区图] ✓ ${districtName} 成功绘制 ${polygonsForThisDistrict.length} 个多边形`);
+                  } else {
+                    console.warn(`[行政区图] ⚠️ ${districtName} 虽然获取到边界，但没有成功绘制任何多边形`);
+                  }
+                  
                   resolve();
                 } else {
                   // 如果当前名称格式失败，尝试下一个
@@ -2533,6 +2581,7 @@
                   } else {
                     console.log(`[行政区图] ❌ 所有格式都失败，无法获取 ${districtName} 的边界`);
                     console.log(`[行政区图] 尝试过的名称格式:`, uniqueVariants);
+                    console.warn(`[行政区图] ⚠️ ${districtName} 的边界绘制失败，该行政区将没有边界显示`);
                     resolve();  // 即使失败也resolve，不阻塞其他行政区的绘制
                   }
                 }
@@ -2551,8 +2600,67 @@
         }
         
         // 等待所有边界绘制完成
+        console.log(`[行政区图] 等待所有 ${boundaryPromises.length} 个行政区的边界绘制完成...`);
         await Promise.all(boundaryPromises);
-        console.log(`[行政区图] 边界绘制完成，共 ${districtPolygons.length} 个多边形`);
+        console.log(`[行政区图] 所有边界Promise已完成，已绘制 ${districtPolygons.length} 个多边形`);
+        
+        // 额外等待，确保所有多边形都已经渲染到地图上
+        // 百度地图的addOverlay是异步的，需要等待地图渲染完成
+        console.log(`[行政区图] 等待地图渲染多边形（第1次等待，2秒）...`);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // 验证多边形是否真的添加到了地图上
+        const polygonOverlaysAfterFirstWait = overlays.filter(overlay => {
+          try {
+            return overlay && overlay.getPath && typeof overlay.getPath === 'function';
+          } catch (e) {
+            return false;
+          }
+        });
+        console.log(`[行政区图] 第1次等待后，地图上有 ${polygonOverlaysAfterFirstWait.length} 个多边形`);
+        
+        // 如果多边形数量不足，再等待一次
+        const expectedDistrictsCountForWait = Object.keys(districtsMap).length;
+        if (polygonOverlaysAfterFirstWait.length < expectedDistrictsCountForWait && polygonOverlaysAfterFirstWait.length < districtPolygons.length) {
+          console.log(`[行政区图] 多边形数量不足，再次等待3秒以确保渲染完成...`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+        
+        // 验证多边形是否真的添加到了地图上（通过检查overlays数组）
+        const polygonOverlays = overlays.filter(overlay => {
+          try {
+            // 检查是否是Polygon类型
+            return overlay && overlay.getPath && typeof overlay.getPath === 'function';
+          } catch (e) {
+            return false;
+          }
+        });
+        console.log(`[行政区图] 验证：地图上共有 ${polygonOverlays.length} 个多边形覆盖物`);
+        
+        // 检查是否所有预期的行政区都有对应的多边形
+        const expectedDistrictsCount = Object.keys(districtsMap).length;
+        if (polygonOverlays.length < expectedDistrictsCount) {
+          console.warn(`[行政区图] ⚠️ 警告：预期 ${expectedDistrictsCount} 个行政区，但只绘制了 ${polygonOverlays.length} 个多边形`);
+          console.warn(`[行政区图] 已绘制的多边形数量: ${districtPolygons.length}，地图上的多边形数量: ${polygonOverlays.length}`);
+          
+          // 列出已绘制的行政区
+          const drawnDistricts = new Set();
+          districtPolygons.forEach((polygon, idx) => {
+            try {
+              const path = polygon.getPath();
+              if (path && path.length > 0) {
+                drawnDistricts.add(`多边形${idx + 1}`);
+              }
+            } catch (e) {
+              // 忽略错误
+            }
+          });
+          console.log(`[行政区图] 已绘制的多边形: ${Array.from(drawnDistricts).join(', ')}`);
+        } else {
+          console.log(`[行政区图] ✓ 所有 ${expectedDistrictsCount} 个行政区都有对应的多边形`);
+        }
+        
+        // 再次等待一下，确保地图完全渲染
         await new Promise(resolve => setTimeout(resolve, 1000));
         
         // 收集所有边界点，用于最终调整视野
@@ -2565,12 +2673,22 @@
                 allBoundaryPoints.push(point);
               });
               console.log(`[行政区图] 多边形 ${idx + 1} 有 ${path.length} 个点`);
+            } else {
+              console.warn(`[行政区图] ⚠️ 多边形 ${idx + 1} 没有路径点`);
             }
           } catch (e) {
             console.error(`[行政区图] 获取边界点失败 (多边形 ${idx + 1}):`, e);
           }
         });
         console.log(`[行政区图] 总共收集到 ${allBoundaryPoints.length} 个边界点`);
+        
+        // 如果边界点数量为0，说明没有成功绘制任何边界，给出警告
+        if (allBoundaryPoints.length === 0) {
+          console.error(`[行政区图] ❌ 错误：没有收集到任何边界点！可能所有边界绘制都失败了`);
+          console.error(`[行政区图] 预期行政区数量: ${expectedDistrictsCount}，实际绘制的多边形数量: ${districtPolygons.length}`);
+          // 可以选择是否继续截图，或者抛出错误
+          // 这里选择继续，但会给出明确的警告
+        }
         
         // 合并所有点（网点 + 边界点）用于调整视野
         const allPoints = allLocations.map(loc => new BMap.Point(loc.lng, loc.lat));
@@ -2580,145 +2698,252 @@
         await new Promise(resolve => setTimeout(resolve, 500));
         
         // 调整视野以适应所有内容（包括行政边界）
-        // 目标：在保证边框不被控制面板遮挡且完全可见的情况下，尽量使用更大的缩放级别
+        // 目标：确保所有县区的所有边框都在视野范围内
         const maxZoom = 15;  // 最大缩放级别，避免过近
-        const minZoom = 10;  // 最小缩放级别，避免过远
+        const minZoom = 8;   // 最小缩放级别，确保能包含更大的区域
         
         // 控制面板位置：left: 20px, top: 20px, max-width: 380px
         const panelLeft = 20;
         const panelTop = 20;
         const panelWidth = 380;
         const panelRight = panelLeft + panelWidth;
+        const viewPadding = 50;  // 视野边距，确保边界不会被裁切
         
-        // 检查边界点是否被控制面板遮挡的函数
-        const checkBoundaryOverlap = (points) => {
-          let hasOverlap = false;
+        // 计算所有点的边界框
+        const calculateBounds = (points) => {
+          if (points.length === 0) return null;
+          
+          let minLng = points[0].lng;
+          let maxLng = points[0].lng;
+          let minLat = points[0].lat;
+          let maxLat = points[0].lat;
+          
+          points.forEach(pt => {
+            minLng = Math.min(minLng, pt.lng);
+            maxLng = Math.max(maxLng, pt.lng);
+            minLat = Math.min(minLat, pt.lat);
+            maxLat = Math.max(maxLat, pt.lat);
+          });
+          
+          return { minLng, maxLng, minLat, maxLat };
+        };
+        
+        // 检查所有边界点是否都在视野内（考虑控制面板和边距）
+        const checkAllPointsVisible = (points, bounds) => {
+          if (!bounds || points.length === 0) return false;
+          
+          const mapRect = map.getContainer().getBoundingClientRect();
+          const effectiveLeft = panelRight + viewPadding;
+          const effectiveRight = mapRect.width - viewPadding;
+          const effectiveTop = viewPadding;
+          const effectiveBottom = mapRect.height - viewPadding;
+          
+          // 将所有边界点转换为屏幕坐标，检查是否都在有效视野内
           for (const pt of points) {
             try {
               const pixel = map.pointToPixel(pt);
               const screenX = pixel.x;
               const screenY = pixel.y;
               
-              // 检查是否在控制面板区域内
-              if (screenX >= panelLeft && screenX <= panelRight && screenY >= panelTop) {
-                hasOverlap = true;
-                break;
+              // 检查是否在有效视野区域内
+              if (screenX < effectiveLeft || screenX > effectiveRight || 
+                  screenY < effectiveTop || screenY > effectiveBottom) {
+                return false;
               }
             } catch (e) {
-              // 忽略转换失败的点
+              // 转换失败，认为不在视野内
+              return false;
             }
           }
-          return hasOverlap;
+          
+          return true;
         };
         
-        if (combinedPoints.length > 0) {
-          console.log(`[行政区图] 调整视野，包含 ${combinedPoints.length} 个点（${allPoints.length} 个网点 + ${allBoundaryPoints.length} 个边界点）`);
-          // 先设置viewport适应所有点（包括边界点）
-          map.setViewport(combinedPoints);
+        // 根据边界框设置地图视野
+        const setViewportFromBounds = (bounds, padding = 0.1) => {
+          // padding 是相对于边界框的百分比边距（例如 0.1 表示增加10%的边距）
+          const lngRange = bounds.maxLng - bounds.minLng;
+          const latRange = bounds.maxLat - bounds.minLat;
           
-          // 等待视野调整完成
-          await new Promise(resolve => setTimeout(resolve, 500));
-          let currentZoom = map.getZoom();
+          // 计算带边距的边界
+          const paddedMinLng = bounds.minLng - lngRange * padding;
+          const paddedMaxLng = bounds.maxLng + lngRange * padding;
+          const paddedMinLat = bounds.minLat - latRange * padding;
+          const paddedMaxLat = bounds.maxLat + latRange * padding;
           
-          // 先缩小一点，确保所有边界完全可见
-          if (currentZoom > minZoom) {
-            currentZoom = Math.max(minZoom, currentZoom - 1);
-            map.setZoom(currentZoom);
-            await new Promise(resolve => setTimeout(resolve, 300));
-            console.log(`[行政区图] 初步调整缩放级别，确保边界可见: ${map.getZoom()}`);
-          }
+          // 计算中心点
+          const centerLng = (paddedMinLng + paddedMaxLng) / 2;
+          const centerLat = (paddedMinLat + paddedMaxLat) / 2;
+          const center = new BMap.Point(centerLng, centerLat);
           
-          // 检查边界点是否被控制面板遮挡
-          let hasOverlap = checkBoundaryOverlap(allBoundaryPoints.length > 0 ? allBoundaryPoints : combinedPoints);
+          // 设置中心
+          map.setCenter(center);
           
-          // 如果没有被遮挡，尝试逐步增大缩放级别，直到刚好不被遮挡
-          if (!hasOverlap && currentZoom < maxZoom) {
-            let bestZoom = currentZoom;
-            // 尝试逐步增大缩放级别
-            for (let testZoom = currentZoom + 1; testZoom <= maxZoom; testZoom++) {
-              map.setZoom(testZoom);
-              await new Promise(resolve => setTimeout(resolve, 200));
-              
-              // 检查是否被遮挡
-              hasOverlap = checkBoundaryOverlap(allBoundaryPoints.length > 0 ? allBoundaryPoints : combinedPoints);
-              
-              if (!hasOverlap) {
-                bestZoom = testZoom;
-                console.log(`[行政区图] 测试缩放级别 ${testZoom}：未被遮挡，可以继续放大`);
-              } else {
-                console.log(`[行政区图] 测试缩放级别 ${testZoom}：被遮挡，回退到 ${bestZoom}`);
-                map.setZoom(bestZoom);
-                await new Promise(resolve => setTimeout(resolve, 200));
-                break;
-              }
-            }
-            console.log(`[行政区图] 最终缩放级别: ${bestZoom}（在保证边框可见且不被遮挡的情况下尽量放大）`);
-          } else if (hasOverlap) {
-            // 如果被遮挡，缩小到合适大小
-            while (hasOverlap && currentZoom > minZoom) {
+          // 计算合适的缩放级别
+          const mapRect = map.getContainer().getBoundingClientRect();
+          const effectiveWidth = mapRect.width - panelRight - viewPadding * 2;
+          const effectiveHeight = mapRect.height - viewPadding * 2;
+          
+          // 计算需要的缩放级别
+          const lngZoom = Math.log2(360 * effectiveWidth / 256 / (paddedMaxLng - paddedMinLng));
+          const latZoom = Math.log2(360 * effectiveHeight / 256 / (paddedMaxLat - paddedMinLat));
+          let zoom = Math.floor(Math.min(lngZoom, latZoom));
+          
+          // 限制在合理范围内（初始设置时稍微保守一点，后面会尝试放大）
+          zoom = Math.max(minZoom, Math.min(maxZoom, zoom));
+          
+          // 稍微缩小一点作为初始值，后面会尝试在可见的前提下尽可能放大
+          zoom = Math.max(minZoom, zoom - 1);
+          
+          map.setZoom(zoom);
+        };
+        
+        if (allBoundaryPoints.length > 0) {
+          // 优先使用边界点计算视野，确保所有县区边框都在视野内
+          console.log(`[行政区图] 使用边界点调整视野，确保所有 ${allBoundaryPoints.length} 个边界点都在视野内`);
+          
+          // 计算边界框（只使用边界点，因为这是最重要的）
+          const bounds = calculateBounds(allBoundaryPoints);
+          
+          if (bounds) {
+            // 设置初始视野（使用边界点，带10%边距）
+            setViewportFromBounds(bounds, 0.15);  // 15%的边距，确保所有边界都在视野内
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // 验证所有边界点是否都在视野内
+            let currentZoom = map.getZoom();
+            let allVisible = checkAllPointsVisible(allBoundaryPoints, bounds);
+            let attempts = 0;
+            const maxAttempts = 10;
+            
+            // 如果不在视野内，逐步缩小直到所有点都在视野内
+            while (!allVisible && currentZoom > minZoom && attempts < maxAttempts) {
               currentZoom = Math.max(minZoom, currentZoom - 1);
               map.setZoom(currentZoom);
-              await new Promise(resolve => setTimeout(resolve, 200));
-              hasOverlap = checkBoundaryOverlap(allBoundaryPoints.length > 0 ? allBoundaryPoints : combinedPoints);
-              console.log(`[行政区图] 缩放级别 ${currentZoom}：${hasOverlap ? '仍被遮挡' : '未被遮挡'}`);
+              await new Promise(resolve => setTimeout(resolve, 300));
+              
+              // 重新计算边界框（因为视野变了）
+              const newBounds = calculateBounds(allBoundaryPoints);
+              allVisible = checkAllPointsVisible(allBoundaryPoints, newBounds);
+              
+              console.log(`[行政区图] 尝试缩放级别 ${currentZoom}，所有边界点可见: ${allVisible}`);
+              attempts++;
             }
-            console.log(`[行政区图] 最终缩放级别: ${currentZoom}（已避免控制面板遮挡）`);
+            
+            if (allVisible) {
+              console.log(`[行政区图] ✓ 所有边界点都在视野内，当前缩放级别: ${currentZoom}`);
+              
+              // 在确保所有边界点可见的前提下，逐步尝试增大缩放级别，找到最大可用缩放级别
+              let bestZoom = currentZoom;
+              console.log(`[行政区图] 开始尝试放大，从缩放级别 ${currentZoom} 开始，最大缩放级别: ${maxZoom}`);
+              
+              // 从当前缩放级别开始，逐步尝试增大
+              for (let testZoom = currentZoom + 1; testZoom <= maxZoom; testZoom++) {
+                map.setZoom(testZoom);
+                await new Promise(resolve => setTimeout(resolve, 300));
+                
+                // 检查所有边界点是否仍然可见
+                const newBounds = calculateBounds(allBoundaryPoints);
+                const stillVisible = checkAllPointsVisible(allBoundaryPoints, newBounds);
+                
+                if (stillVisible) {
+                  bestZoom = testZoom;
+                  console.log(`[行政区图] 缩放级别 ${testZoom}：所有边界点仍然可见，可以继续放大`);
+                } else {
+                  // 如果放大后不可见，回退到上一个可用的缩放级别
+                  console.log(`[行政区图] 缩放级别 ${testZoom}：部分边界点不可见，回退到 ${bestZoom}`);
+                  map.setZoom(bestZoom);
+                  await new Promise(resolve => setTimeout(resolve, 300));
+                  break;
+                }
+              }
+              
+              currentZoom = bestZoom;
+              console.log(`[行政区图] ✓ 最终缩放级别: ${currentZoom}（确保所有边界点可见的最大缩放级别）`);
+            } else {
+              console.log(`[行政区图] ⚠️ 经过 ${attempts} 次尝试，部分边界点可能不在视野内，当前缩放级别: ${currentZoom}`);
+            }
+            
+            // 如果还有网点，也检查网点是否在视野内（可选）
+            if (allPoints.length > 0) {
+              const newBounds = calculateBounds(allBoundaryPoints);
+              let allPointsVisible = checkAllPointsVisible(allPoints, newBounds);
+              
+              // 如果网点不在视野内，稍微缩小一点，但要确保仍然尽可能大
+              if (!allPointsVisible && currentZoom > minZoom) {
+                currentZoom = Math.max(minZoom, currentZoom - 1);
+                map.setZoom(currentZoom);
+                await new Promise(resolve => setTimeout(resolve, 300));
+                console.log(`[行政区图] 调整缩放级别以包含所有网点: ${currentZoom}`);
+                
+                // 再次验证所有边界点仍然可见
+                const finalBounds = calculateBounds(allBoundaryPoints);
+                const boundaryStillVisible = checkAllPointsVisible(allBoundaryPoints, finalBounds);
+                if (!boundaryStillVisible) {
+                  // 如果缩小后边界点不可见，这是不应该发生的，记录警告
+                  console.warn(`[行政区图] ⚠️ 缩小后边界点不可见，需要进一步调整`);
+                }
+              }
+            }
           } else {
-            console.log(`[行政区图] 缩放级别合适: ${currentZoom}（已确保所有行政区边框完全可见且不被遮挡）`);
-          }
-          
-          // 再次等待一下，确保地图完全渲染
-          await new Promise(resolve => setTimeout(resolve, 500));
-        } else if (allBoundaryPoints.length > 0) {
-          // 如果只有边界点，使用边界点调整视野
-          console.log(`[行政区图] 使用边界点调整视野，共 ${allBoundaryPoints.length} 个点`);
-          map.setViewport(allBoundaryPoints);
-          await new Promise(resolve => setTimeout(resolve, 500));
-          let currentZoom = map.getZoom();
-          
-          // 先缩小一点，确保所有边界完全可见
-          if (currentZoom > minZoom) {
-            currentZoom = Math.max(minZoom, currentZoom - 1);
-            map.setZoom(currentZoom);
-            await new Promise(resolve => setTimeout(resolve, 300));
-          }
-          
-          // 检查边界点是否被控制面板遮挡
-          let hasOverlap = checkBoundaryOverlap(allBoundaryPoints);
-          
-          // 如果没有被遮挡，尝试逐步增大缩放级别
-          if (!hasOverlap && currentZoom < maxZoom) {
+            // 如果边界框计算失败，回退到使用setViewport
+            console.log(`[行政区图] 边界框计算失败，使用setViewport`);
+            map.setViewport(allBoundaryPoints);
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // 缩小一点确保边界可见
+            let currentZoom = map.getZoom();
+            if (currentZoom > minZoom) {
+              currentZoom = Math.max(minZoom, currentZoom - 1);
+              map.setZoom(currentZoom);
+              await new Promise(resolve => setTimeout(resolve, 300));
+            }
+            
+            // 尝试在可见的前提下尽可能放大
             let bestZoom = currentZoom;
+            console.log(`[行政区图] 开始尝试放大，从缩放级别 ${currentZoom} 开始`);
             for (let testZoom = currentZoom + 1; testZoom <= maxZoom; testZoom++) {
               map.setZoom(testZoom);
-              await new Promise(resolve => setTimeout(resolve, 200));
-              hasOverlap = checkBoundaryOverlap(allBoundaryPoints);
-              if (!hasOverlap) {
-                bestZoom = testZoom;
-              } else {
+              await new Promise(resolve => setTimeout(resolve, 300));
+              
+              // 简单检查：使用getBounds验证是否所有点都在视野内
+              try {
+                const mapBounds = map.getBounds();
+                let allInBounds = true;
+                for (const pt of allBoundaryPoints) {
+                  if (!mapBounds.containsPoint(pt)) {
+                    allInBounds = false;
+                    break;
+                  }
+                }
+                
+                if (allInBounds) {
+                  bestZoom = testZoom;
+                  console.log(`[行政区图] 缩放级别 ${testZoom}：所有边界点仍然可见，可以继续放大`);
+                } else {
+                  console.log(`[行政区图] 缩放级别 ${testZoom}：部分边界点不可见，回退到 ${bestZoom}`);
+                  map.setZoom(bestZoom);
+                  await new Promise(resolve => setTimeout(resolve, 300));
+                  break;
+                }
+              } catch (e) {
+                // 如果检查失败，保持当前缩放级别
+                console.log(`[行政区图] 检查失败，回退到 ${bestZoom}`);
                 map.setZoom(bestZoom);
-                await new Promise(resolve => setTimeout(resolve, 200));
+                await new Promise(resolve => setTimeout(resolve, 300));
                 break;
               }
             }
-            console.log(`[行政区图] 最终缩放级别: ${bestZoom}`);
-          } else if (hasOverlap) {
-            while (hasOverlap && currentZoom > minZoom) {
-              currentZoom = Math.max(minZoom, currentZoom - 1);
-              map.setZoom(currentZoom);
-              await new Promise(resolve => setTimeout(resolve, 200));
-              hasOverlap = checkBoundaryOverlap(allBoundaryPoints);
-            }
-            console.log(`[行政区图] 最终缩放级别: ${currentZoom}（已避免控制面板遮挡）`);
+            console.log(`[行政区图] ✓ 最终缩放级别: ${bestZoom}（确保所有边界点可见的最大缩放级别）`);
           }
           
           await new Promise(resolve => setTimeout(resolve, 500));
         } else if (allPoints.length > 0) {
-          // 如果只有网点，使用网点调整视野
+          // 如果没有边界点，使用网点调整视野
           console.log(`[行政区图] 使用网点调整视野，共 ${allPoints.length} 个点`);
           map.setViewport(allPoints);
           await new Promise(resolve => setTimeout(resolve, 500));
-          const currentZoom = map.getZoom();
+          let currentZoom = map.getZoom();
           
           if (currentZoom > maxZoom) {
             map.setZoom(maxZoom);
@@ -2731,6 +2956,46 @@
         // 等待渲染完成
         console.log('[行政区图] 等待地图渲染完成...');
         await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // 最后验证：检查是否有边界多边形（在截图前）
+        const finalPolygonOverlays = overlays.filter(overlay => {
+          try {
+            return overlay && overlay.getPath && typeof overlay.getPath === 'function';
+          } catch (e) {
+            return false;
+          }
+        });
+        const expectedDistrictsFinal = Object.keys(districtsMap).length;
+        
+        console.log(`[行政区图] 截图前最终验证：地图上有 ${finalPolygonOverlays.length} 个边界多边形，预期 ${expectedDistrictsFinal} 个行政区`);
+        
+        if (finalPolygonOverlays.length === 0 && expectedDistrictsFinal > 0) {
+          console.error(`[行政区图] ❌ 严重警告：没有绘制任何边界多边形就开始截图！`);
+          console.error(`[行政区图] 预期 ${expectedDistrictsFinal} 个行政区的边界，但地图上没有任何多边形`);
+          console.log(`[行政区图] 等待额外3秒，希望边界能够渲染...`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          
+          // 再次检查
+          const retryPolygonOverlays = overlays.filter(overlay => {
+            try {
+              return overlay && overlay.getPath && typeof overlay.getPath === 'function';
+            } catch (e) {
+              return false;
+            }
+          });
+          console.log(`[行政区图] 重试后检查：地图上有 ${retryPolygonOverlays.length} 个边界多边形`);
+          
+          if (retryPolygonOverlays.length === 0) {
+            console.error(`[行政区图] ❌ 错误：经过额外等待后仍然没有边界多边形，但将继续截图`);
+            console.error(`[行政区图] 这可能导致截图不包含任何区边框，请检查：`);
+            console.error(`[行政区图] 1. 行政区名称是否正确`);
+            console.error(`[行政区图] 2. 百度地图API是否正常`);
+            console.error(`[行政区图] 3. 网络连接是否正常`);
+          }
+        } else if (finalPolygonOverlays.length < expectedDistrictsFinal) {
+          console.warn(`[行政区图] ⚠️ 警告：预期 ${expectedDistrictsFinal} 个行政区，但只绘制了 ${finalPolygonOverlays.length} 个边界`);
+          console.warn(`[行政区图] 部分行政区的边界可能未绘制成功，但将继续截图`);
+        }
         
         console.log('[行政区图] 开始截图...');
         // 截图（使用特殊标记表示这是行政区图）
@@ -2754,6 +3019,40 @@
         console.error('清除地图失败:', clearErr);
       }
       throw e;
+    }
+  }
+
+  // 仅截取行政区图（绘制网点、路线和区边框）- 手动调用
+  async function captureDistrictMapOnly() {
+    try {
+      // 获取当前地图上的所有网点数据
+      const locations = currentLocations.length > 0 ? currentLocations : parseLocationData();
+      
+      if (locations.length === 0) {
+        showError('请先导入或输入网点数据！');
+        return;
+      }
+      
+      // 按网组分组
+      const groups = groupLocationsByGroup(locations);
+      
+      if (Object.keys(groups).length === 0) {
+        showError('没有找到有效的网组数据！');
+        return;
+      }
+      
+      // 收集工号和姓名（如果有）
+      const firstLoc = locations[0];
+      const employeeId = firstLoc.employee_id || '';
+      const employeeName = firstLoc.employee_name || '';
+      const adjustment = firstLoc.adjustment || '';
+      
+      // 使用drawDistrictMapForEmployee的逻辑来绘制
+      await drawDistrictMapForEmployee(employeeId, employeeName, groups, adjustment);
+      
+    } catch (e) {
+      console.error('仅截取行政区图失败:', e);
+      showError('仅截取行政区图失败: ' + e.message);
     }
   }
 
@@ -3153,12 +3452,13 @@
       // 更新路线详情显示
       updateRouteInfo(result, routeSimpleMode);
       
-      // 自动滚动控制面板到底部
+      // 自动滚动控制面板到底部和右部
       setTimeout(() => {
         const panel = document.getElementById('control-panel');
         if (panel) {
           panel.scrollTo({
             top: panel.scrollHeight,
+            left: panel.scrollWidth,
             behavior: 'smooth'
           });
           
@@ -3326,8 +3626,10 @@
       }
       
       if (panel) {
+        // 滚动控制面板到底部和右部，确保显示最新内容
         panel.scrollTo({
           top: panel.scrollHeight,
+          left: panel.scrollWidth,
           behavior: 'smooth'
         });
         // 等待滚动完成后再截图，传入当前数据的locations以获取对应的遮罩内容
@@ -3385,6 +3687,7 @@
       
       // 判断是否为行政区图
       const isDistrictMap = groupName === '__DISTRICT_MAP__';
+      const isDistrictMapOnly = groupName === '__DISTRICT_MAP_ONLY__';
       
       // 获取遮罩内容
       let maskText = '';
@@ -3395,6 +3698,9 @@
         } else {
           maskText = '行政区图';
         }
+      } else if (isDistrictMapOnly) {
+        // 如果是仅行政区图，显示"仅行政区图"
+        maskText = '仅行政区图';
       } else {
         // 普通网组图，优先从传入的locations中获取遮罩内容（当前绘制的网组数据）
         let locationsToCheck = locationsForMask;
@@ -3440,7 +3746,7 @@
           controlPanel.style.top = '20px';
         }
       }
-      const displayName = isDistrictMap ? '行政区图' : (groupName ? '网组 ' + groupName : '');
+      const displayName = isDistrictMap ? '行政区图' : (isDistrictMapOnly ? '仅行政区图' : (groupName ? '网组 ' + groupName : ''));
       
       // 显示截图提示在状态区域（不影响路线详情页）
       updateStatus(`📸 正在截图${displayName}...`, 'loading');
