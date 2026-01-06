@@ -1119,26 +1119,34 @@ def capture_screenshot_endpoint():
         employee_name = data.get('employee_name', '')
         adjustment = data.get('adjustment', '')
         mask_text = data.get('mask_text', '')
+        debug_mode = data.get('debug_mode', False)  # 获取调试模式状态
         
         # 获取当前应用URL
         url = f"http://{HOST}:{_get_actual_port()}"
         
         # 截图保存目录（打包后保存到exe所在目录的"网组网点路线图"文件夹）
         base_dir = _get_base_dir()
-        base_save_dir = os.path.join(base_dir, "网组网点路线图")
         
-        # 如果有工号和姓名，创建子文件夹
-        if employee_id and employee_id.strip() and employee_name and employee_name.strip():
-            safe_employee_id = "".join(c for c in employee_id.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
-            safe_employee_name = "".join(c for c in employee_name.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
-            save_dir = os.path.join(base_save_dir, f"{safe_employee_id}-{safe_employee_name}")
-            
-            # 如果有调整字段，在工号-姓名目录下再创建调整字段子目录
-            if adjustment and adjustment.strip():
-                safe_adjustment = "".join(c for c in adjustment.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
-                save_dir = os.path.join(save_dir, safe_adjustment)
-        else:
+        # 调试模式下保存到 "网组网点路线图/调试模式" 目录
+        if debug_mode:
+            base_save_dir = os.path.join(base_dir, "网组网点路线图", "调试模式")
             save_dir = base_save_dir
+            print(f"[截图API] 调试模式：截图将保存到 {save_dir}")
+        else:
+            base_save_dir = os.path.join(base_dir, "网组网点路线图")
+            
+            # 如果有工号和姓名，创建子文件夹
+            if employee_id and employee_id.strip() and employee_name and employee_name.strip():
+                safe_employee_id = "".join(c for c in employee_id.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+                safe_employee_name = "".join(c for c in employee_name.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+                save_dir = os.path.join(base_save_dir, f"{safe_employee_id}-{safe_employee_name}")
+                
+                # 如果有调整字段，在工号-姓名目录下再创建调整字段子目录
+                if adjustment and adjustment.strip():
+                    safe_adjustment = "".join(c for c in adjustment.strip() if c.isalnum() or c in ('-', '_', ' ')).strip().replace(' ', '_')
+                    save_dir = os.path.join(save_dir, safe_adjustment)
+            else:
+                save_dir = base_save_dir
         
         # 检查浏览器实例
         # 如果浏览器实例不存在，尝试创建（正常启动场景）
